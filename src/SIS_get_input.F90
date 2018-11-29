@@ -118,7 +118,7 @@ subroutine Get_SIS_Input(param_file, dirs, check_params, component, ensemble_num
                                  check_params, component=comp, &
                                  doc_file_dir=output_dir)
         else
-            call open_param_file(trim(parameter_filename(io)), param_file, &
+            call open_param_file(trim(ensembler(parameter_filename(io))), param_file, &
                                  check_params, component=comp, &
                                  doc_file_dir=output_dir)
         endif

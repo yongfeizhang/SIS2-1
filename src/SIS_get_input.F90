@@ -51,11 +51,12 @@ end type directories
 
 contains
 
-subroutine Get_SIS_Input(param_file, dirs, check_params, component)
+subroutine Get_SIS_Input(param_file, dirs, check_params, component, ensemble_num)
   type(param_file_type), optional, intent(out) :: param_file
   type(directories),     optional, intent(out) :: dirs
   logical,               optional, intent(in)  :: check_params
   character(len=*),      optional, intent(in)  :: component
+  integer,               optional, intent(in)  :: ensemble_num !< The ensemble id of the current member
 
 !    See if the run is to be started from saved conditions, and get  !
 !  the names of the I/O directories and initialization file.  This   !
@@ -88,10 +89,20 @@ subroutine Get_SIS_Input(param_file, dirs, check_params, component)
   enddo
 10 call close_file(unit)
   if (present(dirs)) then
-    dirs%output_directory = trim(slasher(ensembler(output_directory)))
-    dirs%restart_output_dir = trim(slasher(ensembler(restart_output_dir)))
-    dirs%restart_input_dir = trim(slasher(ensembler(restart_input_dir)))
-    dirs%input_filename = trim(ensembler(input_filename))
+
+      if (present(ensemble_num)) then
+
+        dirs%output_directory = trim(slasher(ensembler(output_directory,ensemble_num)))
+        dirs%restart_output_dir = trim(slasher(ensembler(restart_output_dir,ensemble_num)))
+        dirs%restart_input_dir = trim(slasher(ensembler(restart_input_dir,ensemble_num)))
+        dirs%input_filename = trim(ensembler(input_filename,ensemble_num))
+      else
+        dirs%output_directory = trim(slasher(ensembler(output_directory)))
+        dirs%restart_output_dir = trim(slasher(ensembler(restart_output_dir)))
+        dirs%restart_input_dir = trim(slasher(ensembler(restart_input_dir)))
+        dirs%input_filename = trim(ensembler(input_filename))
+      endif
+
   endif
 
   comp = "SIS" ; if (present(component)) comp = trim(adjustl(component))
@@ -101,9 +112,16 @@ subroutine Get_SIS_Input(param_file, dirs, check_params, component)
     valid_param_files = 0
     do io = 1, npf
       if (len_trim(trim(parameter_filename(io))) > 0) then
-        call open_param_file(trim(parameter_filename(io)), param_file, &
-                             check_params, component=comp, &
-                             doc_file_dir=output_dir)
+
+        if (present(ensemble_num)) then
+            call open_param_file(trim(ensembler(parameter_filename(io),ensemble_num)), param_file, &
+                                 check_params, component=comp, &
+                                 doc_file_dir=output_dir)
+        else
+            call open_param_file(trim(parameter_filename(io)), param_file, &
+                                 check_params, component=comp, &
+                                 doc_file_dir=output_dir)
+        endif
         valid_param_files = valid_param_files + 1
       endif
     enddo

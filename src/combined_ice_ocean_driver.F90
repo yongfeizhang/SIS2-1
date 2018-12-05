@@ -1,79 +1,70 @@
+!> Provides a common interface for jointly stepping SIS2 and MOM6, and will
+!! evolve as a platform for tightly integrating the ocean and sea ice models.
 module combined_ice_ocean_driver
-!***********************************************************************
-!*                   GNU General Public License                        *
-!* This file is a part of MOM and SIS2.                                *
-!*                                                                     *
-!* MOM is free software; you can redistribute it and/or modify it and  *
-!* are expected to follow the terms of the GNU General Public License  *
-!* as published by the Free Software Foundation; either version 2 of   *
-!* the License, or (at your option) any later version.                 *
-!*                                                                     *
-!* MOM is distributed in the hope that it will be useful, but WITHOUT  *
-!* ANY WARRANTY; without even the implied warranty of MERCHANTABILITY  *
-!* or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public    *
-!* License for more details.                                           *
-!*                                                                     *
-!* For the full text of the GNU General Public License,                *
-!* write to: Free Software Foundation, Inc.,                           *
-!*           675 Mass Ave, Cambridge, MA 02139, USA.                   *
-!* or see:   http://www.gnu.org/licenses/gpl.html                      *
-!***********************************************************************
+
+! This file is a part of SIS2. See LICENSE.md for the license.
 
 !-----------------------------------------------------------------------
 !
 ! This module provides a common interface for jointly stepping SIS2 and
 ! MOM6, and will evolve as a platform for tightly integrating the ocean
 ! and sea ice models.
-!
-! <CONTACT EMAIL="Robert.Hallberg@noaa.gov"> Robert Hallberg
-! </CONTACT>
-!
 
 use MOM_error_handler, only : MOM_error, FATAL, WARNING, is_root_pe
 use MOM_error_handler, only : callTree_enter, callTree_leave
-! use MOM_file_parser, only : get_param, log_version, close_param_file, param_file_type
-use MOM_time_manager, only : time_type, get_time !, set_time, operator(>)
+use MOM_file_parser,   only : param_file_type, open_param_file, close_param_file
+use MOM_file_parser,   only : read_param, get_param, log_param, log_version
+use MOM_io,            only : file_exists, close_file, slasher, ensembler
+use MOM_io,            only : open_namelist_file, check_nml_error
+use MOM_time_manager,  only : time_type, time_type_to_real !, operator(>)
+
 use ice_model_mod,   only : ice_data_type, ice_model_end
 use ice_model_mod,   only : update_ice_slow_thermo, update_ice_dynamics_trans
-use ocean_model_mod, only : update_ocean_model,  ocean_model_end! , ocean_model_init
+use ocean_model_mod, only : update_ocean_model, ocean_model_end
 use ocean_model_mod, only : ocean_public_type, ocean_state_type, ice_ocean_boundary_type
 
-use coupler_types_mod, only: coupler_type_send_data, coupler_type_data_override
-use coupler_types_mod, only: coupler_type_copy_data
+use coupler_types_mod, only : coupler_type_send_data, coupler_type_data_override
+use coupler_types_mod, only : coupler_type_copy_data
 use data_override_mod, only : data_override
-use diag_manager_mod, only : send_data
-use mpp_domains_mod,  only : domain2D, mpp_get_layout, mpp_get_compute_domain
+use mpp_domains_mod,   only : domain2D, mpp_get_layout, mpp_get_compute_domain
 
 implicit none ; private
 
 public :: update_slow_ice_and_ocean, ice_ocean_driver_init, ice_ocean_driver_end
 
+!> The control structure for the combined ice-ocean driver
 type, public :: ice_ocean_driver_type ; private
-  logical :: CS_is_initialized = .false.
+  logical :: CS_is_initialized = .false. !< If true, this module has been initialized
+  logical :: single_MOM_call  !< If true, advance the state of MOM with a single
+                              !! step including both dynamics and thermodynamics.
+                              !! If false, the two phases are advanced with
+                              !! separate calls. The default is true.
 end type ice_ocean_driver_type
 
 contains
 
 !=======================================================================
-! <SUBROUTINE NAME="ice_ocean_driver_init">
-!
-! <DESCRIPTION>
-! Initialize the coupling between the slow-ice and ocean models.
-! </DESCRIPTION>
-!
-!>   This subroutine initializes the combined ice ocean coupling control type.
+!>  This subroutine initializes the combined ice ocean coupling control type.
 subroutine ice_ocean_driver_init(CS, Time_init, Time_in)
   type(ice_ocean_driver_type), pointer       :: CS        !< The control structure for combined ice-ocean driver
   type(time_type),             intent(in)    :: Time_init !< The start time for the coupled model's calendar.
   type(time_type),             intent(in)    :: Time_in   !< The time at which to initialize the coupled model.
 
+  ! Local variables
+  integer, parameter :: npf = 5 ! Maximum number of parameter files
+  character(len=240) :: &
+    output_directory = ' ', &      ! Directory to use to write the model output.
+    parameter_filename(npf) = ' '  ! List of files containing parameters.
+  character(len=240) :: output_dir ! A directory for logging output.
+  ! This include declares and sets the variable "version".
+# include "version_variable.h"
+  character(len=40)  :: mdl = "ice_ocean_driver_init"  ! This module's name.
 !     real :: Time_unit   ! The time unit in seconds for ENERGYSAVEDAYS.
-!   ! This include declares and sets the variable "version".
-!   #include "version_variable.h"
-!     character(len=40)  :: mdl = "ice_ocean_driver_init"  ! This module's name.
 !     character(len=48)  :: stagger
-!     integer :: secs, days
-!  type(param_file_type) :: param_file !< A structure to parse for run-time parameters
+  type(param_file_type) :: param_file !< A structure to parse for run-time parameters
+  integer :: unit, io, ierr, valid_param_files
+
+  namelist /ice_ocean_driver_nml/ output_directory, parameter_filename
 
   call callTree_enter("ice_ocean_driver_init(), combined_ice_ocean_driver.F90")
   if (associated(CS)) then
@@ -83,47 +74,49 @@ subroutine ice_ocean_driver_init(CS, Time_init, Time_in)
   endif
   allocate(CS)
 
-!     OS%is_ocean_pe = Ocean_sfc%is_ocean_pe
-!     if (.not.OS%is_ocean_pe) return
+  ! Read the relevant input parameters.
+  if (file_exists('input.nml')) then
+    unit = open_namelist_file(file='input.nml')
+  else
+    call MOM_error(FATAL, 'Required namelist file input.nml does not exist.')
+  endif
 
-!     ! Read all relevant parameters and write them to the model log.
-!     call log_version(param_file, mdl, version, "")
-!     call get_param(param_file, mdl, "RESTART_CONTROL", OS%Restart_control, &
-!                    "An integer whose bits encode which restart files are \n"//&
-!                    "written. Add 2 (bit 1) for a time-stamped file, and odd \n"//&
-!                    "(bit 0) for a non-time-stamped file.  A restart file \n"//&
-!                    "will be saved at the end of the run segment for any \n"//&
-!                    "non-negative value.", default=1)
-!     call get_param(param_file, mdl, "TIMEUNIT", Time_unit, &
-!                    "The time unit for ENERGYSAVEDAYS.", &
-!                    units="s", default=86400.0)
+  ierr=1 ; do while (ierr /= 0)
+    read(unit, nml=ice_ocean_driver_nml, iostat=io, end=10)
+    ierr = check_nml_error(io, 'ice_ocean_driver_nml')
+  enddo
+10 call close_file(unit)
 
-!     call get_param(param_file, mdl, "OCEAN_SURFACE_STAGGER", stagger, &
-!                    "A case-insensitive character string to indicate the \n"//&
-!                    "staggering of the surface velocity field that is \n"//&
-!                    "returned to the coupler.  Valid values include \n"//&
-!                    "'A', 'B', or 'C'.", default="C")
-!     if (uppercase(stagger(1:1)) == 'A') then ; Ocean_sfc%stagger = AGRID
-!     elseif (uppercase(stagger(1:1)) == 'B') then ; Ocean_sfc%stagger = BGRID_NE
-!     elseif (uppercase(stagger(1:1)) == 'C') then ; Ocean_sfc%stagger = CGRID_NE
-!     else ; call MOM_error(FATAL,"ice_ocean_driver_init: OCEAN_SURFACE_STAGGER = "// &
-!                           trim(stagger)//" is invalid.") ; endif
+  output_dir = trim(slasher(ensembler(output_directory)))
+  valid_param_files = 0
+  do io=1,npf ; if (len_trim(trim(parameter_filename(io))) > 0) then
+    call open_param_file(trim(parameter_filename(io)), param_file, &
+                         component="Ice_Ocean_driver", doc_file_dir=output_dir)
+    valid_param_files = valid_param_files + 1
+  endif ; enddo
+  if (valid_param_files == 0) call MOM_error(FATAL, "There must be at least "//&
+       "1 valid entry in input_filename in ice_ocean_driver_nml in input.nml.")
 
-!     call close_param_file(param_file)
+  ! Read all relevant parameters and write them to the model log.
+  call log_version(param_file, mdl, version, "")
+
+  call get_param(param_file, mdl, "SINGLE_MOM_CALL", CS%single_MOM_call, &
+                 "If true, advance the state of MOM with a single step \n"//&
+                 "including both dynamics and thermodynamics.  If false, \n"//&
+                 "the two phases are advanced with separate calls.", default=.true.)
+
+!  OS%is_ocean_pe = Ocean_sfc%is_ocean_pe
+!  if (.not.OS%is_ocean_pe) return
+
+!  call get_param(param_file, mdl, "TIMEUNIT", Time_unit, &
+!                 "The time unit for ENERGYSAVEDAYS.", units="s", default=86400.0)
+
+  call close_param_file(param_file)
   CS%CS_is_initialized = .true.
 
   call callTree_leave("ice_ocean_driver_init(")
 end subroutine ice_ocean_driver_init
-! </SUBROUTINE> NAME="ice_ocean_driver_init"
 
-
-!=======================================================================
-! <SUBROUTINE NAME="update_slow_ice_and_ocean">
-!
-! <DESCRIPTION>
-! Advance the slow portions of the sea-ice and the ocean in tandem.
-! </DESCRIPTION>
-!
 
 !>   The subroutine update_slow_ice_and_ocean uses the forcing already stored in
 !! the ice_data_type to advance both the sea-ice (and icebergs) and ocean states
@@ -144,11 +137,9 @@ subroutine update_slow_ice_and_ocean(CS, Ice, Ocn, Ocean_sfc, Ice_ocean_boundary
                                                                !! the ocean and ice
 
   real :: time_step         ! The time step of a call to step_MOM in seconds.
-  integer :: secs, days
 
   call callTree_enter("update_ice_and_ocean(), combined_ice_ocean_driver.F90")
-  call get_time(coupling_time_step, secs, days)
-  time_step = 86400.0*real(days) + real(secs)
+  time_step = time_type_to_real(coupling_time_step)
 
 !  if (time_start_update /= CS%Time) then
 !    call MOM_error(WARNING, "update_ice_and_ocean: internal clock does not "//&
@@ -183,17 +174,31 @@ subroutine update_slow_ice_and_ocean(CS, Ice, Ocn, Ocean_sfc, Ice_ocean_boundary
   call direct_flux_ice_to_IOB( time_start_update, Ice, Ice_ocean_boundary )
 !    call mpp_clock_end(fluxIceOceanClock)
 
-  call update_ocean_model( Ice_ocean_boundary, Ocn, Ocean_sfc, &
-                           time_start_update, coupling_time_step )
+  if (CS%single_MOM_call) then
+    call update_ocean_model(Ice_ocean_boundary, Ocn, Ocean_sfc, &
+                            time_start_update, coupling_time_step )
+  else
+    !### This is here as a temporary measure to avoid using newer arguments
+    !### to update_ocean_model.
+    call update_ocean_model(Ice_ocean_boundary, Ocn, Ocean_sfc, &
+                            time_start_update, coupling_time_step )
+!### This pair of calls works properly with MOM6 in place of the single call above.
+!    call update_ocean_model(Ice_ocean_boundary, Ocn, Ocean_sfc, time_start_update, &
+!                            coupling_time_step,  update_dyn=.true., update_thermo=.false., &
+!                            start_cycle=.true., end_cycle=.false., cycle_length=time_step)
+!    call update_ocean_model(Ice_ocean_boundary, Ocn, Ocean_sfc, time_start_update, &
+!                            coupling_time_step,  update_dyn=.false., update_thermo=.true., &
+!                            start_cycle=.false., end_cycle=.true., cycle_length=time_step)
+  endif
 
   call callTree_leave("update_ice_and_ocean()")
 end subroutine update_slow_ice_and_ocean
-! </SUBROUTINE> NAME="update_slow_ice_and_ocean"
 
 !> same_domain returns true if two domains use the same list of PEs and have
 !! the same size computational domains.
 function same_domain(a, b)
-  type(domain2D), intent(in) :: a, b
+  type(domain2D), intent(in) :: a !< The first domain in the comparison
+  type(domain2D), intent(in) :: b !< The second domain in the comparison
   integer :: isize_a, jsize_a, isize_b, jsize_b
   integer :: layout_a(2), layout_b(2)
   logical :: same_domain
@@ -241,6 +246,7 @@ subroutine direct_flux_ice_to_IOB( Time, Ice, IOB )
   if (ASSOCIATED(IOB%fprec)) IOB%fprec(:,:) = Ice%fprec(:,:)
   if (ASSOCIATED(IOB%runoff)) IOB%runoff(:,:) = Ice%runoff(:,:)
   if (ASSOCIATED(IOB%calving)) IOB%calving(:,:) = Ice%calving
+  if (ASSOCIATED(IOB%stress_mag)) IOB%stress_mag(:,:) = Ice%stress_mag(:,:)
   if (ASSOCIATED(IOB%ustar_berg)) IOB%ustar_berg(:,:) = Ice%ustar_berg(:,:)
   if (ASSOCIATED(IOB%area_berg)) IOB%area_berg(:,:) = Ice%area_berg(:,:)
   if (ASSOCIATED(IOB%mass_berg)) IOB%mass_berg(:,:) = Ice%mass_berg(:,:)
@@ -270,7 +276,9 @@ subroutine direct_flux_ice_to_IOB( Time, Ice, IOB )
   call data_override('OCN', 'calving_hflx', IOB%calving_hflx  , Time)
   call data_override('OCN', 'p',         IOB%p        , Time)
   call data_override('OCN', 'mi',        IOB%mi       , Time)
-  !Are these if statements needed, or does data_override routine check if variable is assosiated?
+  if (ASSOCIATED(IOB%stress_mag) ) &
+    call data_override('OCN', 'stress_mag', IOB%stress_mag, Time )
+  !Are these if statements needed, or does data_override routine check if variable is associated?
   if (ASSOCIATED(IOB%ustar_berg)) &
     call data_override('OCN', 'ustar_berg', IOB%ustar_berg, Time)
   if (ASSOCIATED(IOB%area_berg) ) &
@@ -286,12 +294,6 @@ subroutine direct_flux_ice_to_IOB( Time, Ice, IOB )
 end subroutine direct_flux_ice_to_IOB
 
 !=======================================================================
-! <SUBROUTINE NAME="ice_ocean_driver_end">
-!
-! <DESCRIPTION>
-! Close down the sea-ice and ocean models
-! </DESCRIPTION>
-!
 !>   The subroutine ice_ocean_driver_end terminates the model run, saving
 !! the ocean and slow ice states in restart files and deallocating any data
 !! associated with the ocean and slow ice.
@@ -302,13 +304,12 @@ subroutine ice_ocean_driver_end(CS, Ice, Ocean_sfc, Ocn, Time)
   type(ocean_public_type), intent(inout) :: Ocean_sfc !< The publicly visible ocean surface state type
   type(time_type),         intent(in)    :: Time !< The model time, used for writing restarts
 
-  call ice_model_end (Ice)
+  call ice_model_end(Ice)
 
   call ocean_model_end(Ocean_sfc, Ocn, Time)
 
   if (associated(CS)) deallocate(CS)
 
 end subroutine ice_ocean_driver_end
-! </SUBROUTINE> NAME="ice_ocean_driver_end"
 
 end module combined_ice_ocean_driver

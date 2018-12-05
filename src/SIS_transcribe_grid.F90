@@ -1,24 +1,7 @@
+!> Contains routines to copy shared dyamic grids to the ice grid and vice versa.
 module SIS_transcribe_grid
 
-!***********************************************************************
-!*                   GNU General Public License                        *
-!* This file is a part of SIS2.                                        *
-!*                                                                     *
-!* SIS2 is free software; you can redistribute it and/or modify it and *
-!* are expected to follow the terms of the GNU General Public License  *
-!* as published by the Free Software Foundation; either version 2 of   *
-!* the License, or (at your option) any later version.                 *
-!*                                                                     *
-!* SIS2 is distributed in the hope that it will be useful, but WITHOUT *
-!* ANY WARRANTY; without even the implied warranty of MERCHANTABILITY  *
-!* or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public    *
-!* License for more details.                                           *
-!*                                                                     *
-!* For the full text of the GNU General Public License,                *
-!* write to: Free Software Foundation, Inc.,                           *
-!*           675 Mass Ave, Cambridge, MA 02139, USA.                   *
-!* or see:   http://www.gnu.org/licenses/gpl.html                      *
-!***********************************************************************
+! This file is a part of SIS2.  See LICENSE.md for the license.
 
 use MOM_domains, only : pass_var, pass_vector
 use MOM_domains, only : To_All, SCALAR_PAIR, CGRID_NE, AGRID, BGRID_NE, CORNER
@@ -81,7 +64,6 @@ subroutine copy_dyngrid_to_SIS_horgrid(dG, SG)
     SG%dxCu(I,j) = dG%dxCu(I+ido,j+jdo)
     SG%dyCu(I,j) = dG%dyCu(I+ido,j+jdo)
     SG%dy_Cu(I,j) = dG%dy_Cu(I+ido,j+jdo)
-    SG%dy_Cu_obc(I,j) = dG%dy_Cu_obc(I+ido,j+jdo)
 
     SG%mask2dCu(I,j) = dG%mask2dCu(I+ido,j+jdo)
     SG%areaCu(I,j) = dG%areaCu(I+ido,j+jdo)
@@ -94,7 +76,6 @@ subroutine copy_dyngrid_to_SIS_horgrid(dG, SG)
     SG%dxCv(i,J) = dG%dxCv(i+ido,J+jdo)
     SG%dyCv(i,J) = dG%dyCv(i+ido,J+jdo)
     SG%dx_Cv(i,J) = dG%dx_Cv(i+ido,J+jdo)
-    SG%dx_Cv_obc(i,J) = dG%dx_Cv_obc(i+ido,J+jdo)
 
     SG%mask2dCv(i,J) = dG%mask2dCv(i+ido,J+jdo)
     SG%areaCv(i,J) = dG%areaCv(i+ido,J+jdo)
@@ -146,14 +127,13 @@ subroutine copy_dyngrid_to_SIS_horgrid(dG, SG)
   call pass_vector(SG%dyCu, SG%dxCv, SG%Domain, To_All+Scalar_Pair, CGRID_NE)
   call pass_vector(SG%dxCu, SG%dyCv, SG%Domain, To_All+Scalar_Pair, CGRID_NE)
   call pass_vector(SG%dy_Cu, SG%dx_Cv, SG%Domain, To_All+Scalar_Pair, CGRID_NE)
-  call pass_vector(SG%dy_Cu_obc, SG%dx_Cv_obc, SG%Domain, To_All+Scalar_Pair, CGRID_NE)
   call pass_vector(SG%mask2dCu, SG%mask2dCv, SG%Domain, To_All+Scalar_Pair, CGRID_NE)
   call pass_vector(SG%IareaCu, SG%IareaCv, SG%Domain, To_All+Scalar_Pair, CGRID_NE)
   call pass_vector(SG%IareaCu, SG%IareaCv, SG%Domain, To_All+Scalar_Pair, CGRID_NE)
   call pass_vector(SG%geoLatCu, SG%geoLatCv, SG%Domain, To_All+Scalar_Pair, CGRID_NE)
 
   call pass_var(SG%areaBu, SG%Domain, position=CORNER)
-  call pass_var(SG%geoLonBu, SG%Domain, position=CORNER)
+  call pass_var(SG%geoLonBu, SG%Domain, position=CORNER, inner_halo=SG%isc-isd)
   call pass_var(SG%geoLatBu, SG%Domain, position=CORNER)
   call pass_vector(SG%dxBu, SG%dyBu, SG%Domain, To_All+Scalar_Pair, BGRID_NE)
   call pass_var(SG%CoriolisBu, SG%Domain, position=CORNER)
@@ -213,7 +193,6 @@ subroutine copy_SIS_horgrid_to_dyngrid(SG, dG)
     dG%dxCu(I,j) = SG%dxCu(I+ido,j+jdo)
     dG%dyCu(I,j) = SG%dyCu(I+ido,j+jdo)
     dG%dy_Cu(I,j) = SG%dy_Cu(I+ido,j+jdo)
-    dG%dy_Cu_obc(I,j) = SG%dy_Cu_obc(I+ido,j+jdo)
 
     dG%mask2dCu(I,j) = SG%mask2dCu(I+ido,j+jdo)
     dG%areaCu(I,j) = SG%areaCu(I+ido,j+jdo)
@@ -226,7 +205,6 @@ subroutine copy_SIS_horgrid_to_dyngrid(SG, dG)
     dG%dxCv(i,J) = SG%dxCv(i+ido,J+jdo)
     dG%dyCv(i,J) = SG%dyCv(i+ido,J+jdo)
     dG%dx_Cv(i,J) = SG%dx_Cv(i+ido,J+jdo)
-    dG%dx_Cv_obc(i,J) = SG%dx_Cv_obc(i+ido,J+jdo)
 
     dG%mask2dCv(i,J) = SG%mask2dCv(i+ido,J+jdo)
     dG%areaCv(i,J) = SG%areaCv(i+ido,J+jdo)
@@ -278,14 +256,13 @@ subroutine copy_SIS_horgrid_to_dyngrid(SG, dG)
   call pass_vector(dG%dyCu, dG%dxCv, dG%Domain, To_All+Scalar_Pair, CGRID_NE)
   call pass_vector(dG%dxCu, dG%dyCv, dG%Domain, To_All+Scalar_Pair, CGRID_NE)
   call pass_vector(dG%dy_Cu, dG%dx_Cv, dG%Domain, To_All+Scalar_Pair, CGRID_NE)
-  call pass_vector(dG%dy_Cu_obc, dG%dx_Cv_obc, dG%Domain, To_All+Scalar_Pair, CGRID_NE)
   call pass_vector(dG%mask2dCu, dG%mask2dCv, dG%Domain, To_All+Scalar_Pair, CGRID_NE)
   call pass_vector(dG%IareaCu, dG%IareaCv, dG%Domain, To_All+Scalar_Pair, CGRID_NE)
   call pass_vector(dG%IareaCu, dG%IareaCv, dG%Domain, To_All+Scalar_Pair, CGRID_NE)
   call pass_vector(dG%geoLatCu, dG%geoLatCv, dG%Domain, To_All+Scalar_Pair, CGRID_NE)
 
   call pass_var(dG%areaBu, dG%Domain, position=CORNER)
-  call pass_var(dG%geoLonBu, dG%Domain, position=CORNER)
+  call pass_var(dG%geoLonBu, dG%Domain, position=CORNER, inner_halo=dG%isc-isd)
   call pass_var(dG%geoLatBu, dG%Domain, position=CORNER)
   call pass_vector(dG%dxBu, dG%dyBu, dG%Domain, To_All+Scalar_Pair, BGRID_NE)
   call pass_var(dG%CoriolisBu, dG%Domain, position=CORNER)

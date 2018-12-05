@@ -1,24 +1,7 @@
+!> Routines that perform various error checking and debugging functions for SIS2
 module SIS_debugging
 
-!***********************************************************************
-!*                   GNU General Public License                        *
-!* This file is a part of SIS2.                                        *
-!*                                                                     *
-!* SIS2 is free software; you can redistribute it and/or modify it and *
-!* are expected to follow the terms of the GNU General Public License  *
-!* as published by the Free Software Foundation; either version 2 of   *
-!* the License, or (at your option) any later version.                 *
-!*                                                                     *
-!* SIS2 is distributed in the hope that it will be useful, but WITHOUT *
-!* ANY WARRANTY; without even the implied warranty of MERCHANTABILITY  *
-!* or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public    *
-!* License for more details.                                           *
-!*                                                                     *
-!* For the full text of the GNU General Public License,                *
-!* write to: Free Software Foundation, Inc.,                           *
-!*           675 Mass Ave, Cambridge, MA 02139, USA.                   *
-!* or see:   http://www.gnu.org/licenses/gpl.html                      *
-!***********************************************************************
+! This file is a part of SIS2.  See LICENSE.md for the lisense file.
 
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
 !   This module contains subroutines that perform various error checking and   !
@@ -52,36 +35,43 @@ public :: SIS_debugging_init
 public :: hchksum, Bchksum, is_NaN, chksum
 public :: hchksum_pair, Bchksum_pair, uvchksum
 
+!> do checksums on a pair of fields
 interface hchksum_pair
-    module procedure hchksum_pair_3d, hchksum_pair_2d
+  module procedure hchksum_pair_3d, hchksum_pair_2d
 end interface hchksum_pair
 
+!> do checksums on a pair of fields at corner points
 interface Bchksum_pair
-    module procedure Bchksum_pair_3d, Bchksum_pair_2d
+  module procedure Bchksum_pair_3d, Bchksum_pair_2d
 end interface Bchksum_pair
 
+!> do checksums on the components of a vector
 interface uvchksum
-    module procedure uvchksum_3d, uvchksum_2d
-    module procedure uvchksum_3d_dG, uvchksum_2d_dG
+  module procedure uvchksum_3d, uvchksum_2d
+  module procedure uvchksum_3d_dG, uvchksum_2d_dG
 end interface uvchksum
 
+!> Check the duplicate points of the components of a C-grid vector
 interface check_redundant_C
   module procedure check_redundant_vC3d, check_redundant_vC2d
 end interface check_redundant_C
+!> Check the duplicate points of the components of a B-grid vector or scalar
 interface check_redundant_B
   module procedure check_redundant_vB3d, check_redundant_vB2d
   module procedure check_redundant_sB3d, check_redundant_sB2d
 end interface check_redundant_B
+!> Check the duplicate points of the components of an A-grid vector or scalar
 interface check_redundant_T
   module procedure check_redundant_sT3d, check_redundant_sT2d
   module procedure check_redundant_vT3d, check_redundant_vT2d
 end interface check_redundant_T
 
-integer :: max_redundant_prints = 100
-integer :: redundant_prints(3) = 0
-logical :: debug = .false.
-logical :: debug_chksums = .true.
-logical :: debug_redundant = .true.
+integer :: max_redundant_prints = 100 !< The maximum number of error messages to print
+integer :: redundant_prints(3) = 0  !< The maximum number of error messages to print
+logical :: debug = .false.          !< If true, write out verbose debugging data.
+logical :: debug_chksums = .true.   !< If true, checksums are performed on arrays in the various vec_chksum routines.
+logical :: debug_redundant = .true. !< If true, debug redundant data points during calls to the
+                                    !! various vec_chksum routines.
 
 contains
 
@@ -90,33 +80,41 @@ contains
 !> SIS_debugging_init initializes the SIS_debugging module, and sets
 !! the parameterts that control which checks are active for SIS2.
 subroutine SIS_debugging_init(param_file)
-  type(param_file_type),   intent(in)    :: param_file
+  type(param_file_type),   intent(in)    :: param_file !< A structure to parse for run-time parameters
 ! This include declares and sets the variable "version".
 #include "version_variable.h"
   character(len=40)  :: mdl = "SIS_debugging" ! This module's name.
 
   call log_version(param_file, mdl, version)
   call get_param(param_file, mdl, "DEBUG", debug, &
-                 "If true, write out verbose debugging data.", default=.false.)
+                 "If true, write out verbose debugging data.", &
+                 default=.false., debuggingParam=.true.)
   call get_param(param_file, mdl, "DEBUG_CHKSUMS", debug_chksums, &
                  "If true, checksums are performed on arrays in the \n"//&
-                 "various vec_chksum routines.", default=debug)
+                 "various vec_chksum routines.", default=debug, &
+                 debuggingParam=.true.)
   call get_param(param_file, mdl, "DEBUG_REDUNDANT", debug_redundant, &
                  "If true, debug redundant data points during calls to \n"//&
-                 "the various vec_chksum routines.", default=debug)
+                 "the various vec_chksum routines.", default=debug, &
+                 debuggingParam=.true.)
 
   call MOM_checksums_init(param_file)
 
 end subroutine SIS_debugging_init
 
+!> Check duplicated points of 3-d C-grid vectors for consistency and
+!! document offending points
 subroutine check_redundant_vC3d(mesg, u_comp, v_comp, G, is, ie, js, je, &
                                 direction)
-  character(len=*),                    intent(in)    :: mesg
-  type(SIS_hor_grid_type),             intent(inout) :: G
-  real, dimension(G%IsdB:,G%jsd:,:),   intent(in)    :: u_comp
-  real, dimension(G%isd:,G%JsdB:,:),   intent(in)    :: v_comp
-  integer,                   optional, intent(in)    :: is, ie, js, je
-  integer,                   optional, intent(in)    :: direction
+  character(len=*),                    intent(in)    :: mesg !< An identifying message
+  type(SIS_hor_grid_type),             intent(inout) :: G    !< The horizontal grid type
+  real, dimension(G%IsdB:,G%jsd:,:),   intent(in)    :: u_comp !< The u-component of the vector being checked
+  real, dimension(G%isd:,G%JsdB:,:),   intent(in)    :: v_comp !< The v-component of the vector being checked
+  integer,                   optional, intent(in)    :: is   !< The starting i-index to work on
+  integer,                   optional, intent(in)    :: ie   !< The ending i-index to work on
+  integer,                   optional, intent(in)    :: js   !< The starting j-index to work on
+  integer,                   optional, intent(in)    :: je   !< The ending j-index to work on
+  integer,                   optional, intent(in)    :: direction !< The direction flag to pass to pass_vector
 ! Arguments: u_comp - The u-component of the vector being checked.
 !  (in)      v_comp - The v-component of the vector being checked.
 !  (in)      mesg - A message indicating what is being checked.
@@ -138,20 +136,19 @@ subroutine check_redundant_vC3d(mesg, u_comp, v_comp, G, is, ie, js, je, &
   enddo
 end subroutine  check_redundant_vC3d
 
+!> Check duplicated points of 2-d C-grid vectors for consistency and
+!! document offending points
 subroutine check_redundant_vC2d(mesg, u_comp, v_comp, G, is, ie, js, je, &
                                 direction)
-  character(len=*),                intent(in)    :: mesg
-  type(SIS_hor_grid_type),         intent(inout) :: G
-  real, dimension(G%IsdB:,G%jsd:), intent(in)    :: u_comp
-  real, dimension(G%isd:,G%JsdB:), intent(in)    :: v_comp
-  integer,               optional, intent(in)    :: is, ie, js, je
-  integer,               optional, intent(in)    :: direction
-! Arguments: u_comp - The u-component of the vector being checked.
-!  (in)      v_comp - The v-component of the vector being checked.
-!  (in)      mesg - A message indicating what is being checked.
-!  (in)      G - The ocean's grid structure.
-!  (in/opt)  is, ie, js, je - the i- and j- range of indices to check.
-!  (in/opt)  direction - the direction flag to be passed to pass_vector.
+  character(len=*),                intent(in)    :: mesg !< An identifying message
+  type(SIS_hor_grid_type),         intent(inout) :: G    !< The horizontal grid type
+  real, dimension(G%IsdB:,G%jsd:), intent(in)    :: u_comp !< The u-component of the vector being checked
+  real, dimension(G%isd:,G%JsdB:), intent(in)    :: v_comp !< The v-component of the vector being checked
+  integer,               optional, intent(in)    :: is   !< The starting i-index to work on
+  integer,               optional, intent(in)    :: ie   !< The ending i-index to work on
+  integer,               optional, intent(in)    :: js   !< The starting j-index to work on
+  integer,               optional, intent(in)    :: je   !< The ending j-index to work on
+  integer,               optional, intent(in)    :: direction !< The direction flag to pass to pass_vector
 
   real :: u_nonsym(G%isd:G%ied,G%jsd:G%jed)
   real :: v_nonsym(G%isd:G%ied,G%jsd:G%jed)
@@ -213,15 +210,16 @@ subroutine check_redundant_vC2d(mesg, u_comp, v_comp, G, is, ie, js, je, &
 
 end subroutine  check_redundant_vC2d
 
+!> Check duplicated points of 3-d B-grid scalars for consistency and
+!! document offending points
 subroutine check_redundant_sB3d(mesg, array, G, is, ie, js, je)
-  character(len=*),                     intent(in)    :: mesg
-  type(SIS_hor_grid_type),              intent(inout) :: G
-  real, dimension(G%IsdB:,G%JsdB:,:),   intent(in) :: array
-  integer,                    optional, intent(in)    :: is, ie, js, je
-! Arguments: array - The array being checked.
-!  (in)      mesg - A message indicating what is being checked.
-!  (in)      G - The ocean's grid structure.
-!  (in/opt)  is, ie, js, je - the i- and j- range of indices to check.
+  character(len=*),                     intent(in)    :: mesg !< An identifying message
+  type(SIS_hor_grid_type),              intent(inout) :: G    !< The horizontal grid type
+  real, dimension(G%IsdB:,G%JsdB:,:),   intent(in)    :: array !< The array being checked
+  integer,                    optional, intent(in)    :: is   !< The starting i-index to work on
+  integer,                    optional, intent(in)    :: ie   !< The ending i-index to work on
+  integer,                    optional, intent(in)    :: js   !< The starting j-index to work on
+  integer,                    optional, intent(in)    :: je   !< The ending j-index to work on
 
   character(len=24) :: mesg_k
   integer :: k
@@ -237,16 +235,16 @@ subroutine check_redundant_sB3d(mesg, array, G, is, ie, js, je)
   enddo
 end subroutine  check_redundant_sB3d
 
-
+!> Check duplicated points of 2-d B-grid scalars for consistency and
+!! document offending points
 subroutine check_redundant_sB2d(mesg, array, G, is, ie, js, je)
-  character(len=*),                 intent(in)    :: mesg
-  type(SIS_hor_grid_type),          intent(inout) :: G
-  real, dimension(G%IsdB:,G%JsdB:), intent(in)   :: array
-  integer,                optional, intent(in)    :: is, ie, js, je
-! Arguments: array - The array being checked.
-!  (in)      mesg - A message indicating what is being checked.
-!  (in)      G - The ocean's grid structure.
-!  (in/opt)  is, ie, js, je - the i- and j- range of indices to check.
+  character(len=*),                 intent(in)    :: mesg !< An identifying message
+  type(SIS_hor_grid_type),          intent(inout) :: G    !< The horizontal grid type
+  real, dimension(G%IsdB:,G%JsdB:), intent(in)    :: array !< The array being checked
+  integer,                optional, intent(in)    :: is   !< The starting i-index to work on
+  integer,                optional, intent(in)    :: ie   !< The ending i-index to work on
+  integer,                optional, intent(in)    :: js   !< The starting j-index to work on
+  integer,                optional, intent(in)    :: je   !< The ending j-index to work on
 
   real :: a_nonsym(G%isd:G%ied,G%jsd:G%jed)
   real :: a_resym(G%IsdB:G%IedB,G%JsdB:G%JedB)
@@ -296,21 +294,19 @@ subroutine check_redundant_sB2d(mesg, array, G, is, ie, js, je)
 
 end subroutine  check_redundant_sB2d
 
-
+!> Check duplicated points of 3-d B-grid vectors for consistency and
+!! document offending points
 subroutine check_redundant_vB3d(mesg, u_comp, v_comp, G, is, ie, js, je, &
                                 direction)
-  character(len=*),                    intent(in)    :: mesg
-  type(SIS_hor_grid_type),             intent(inout) :: G
-  real, dimension(G%IsdB:,G%JsdB:,:),  intent(in)    :: u_comp
-  real, dimension(G%IsdB:,G%JsdB:,:),  intent(in)    :: v_comp
-  integer,                   optional, intent(in)    :: is, ie, js, je
-  integer,                   optional, intent(in)    :: direction
-! Arguments: u_comp - The u-component of the vector being checked.
-!  (in)      v_comp - The v-component of the vector being checked.
-!  (in)      mesg - A message indicating what is being checked.
-!  (in)      G - The ocean's grid structure.
-!  (in/opt)  is, ie, js, je - the i- and j- range of indices to check.
-!  (in/opt)  direction - the direction flag to be passed to pass_vector.
+  character(len=*),                    intent(in)    :: mesg !< An identifying message
+  type(SIS_hor_grid_type),             intent(inout) :: G    !< The horizontal grid type
+  real, dimension(G%IsdB:,G%JsdB:,:),  intent(in)    :: u_comp !< The u-component of the vector being checked
+  real, dimension(G%IsdB:,G%JsdB:,:),  intent(in)    :: v_comp !< The v-component of the vector being checked
+  integer,                   optional, intent(in)    :: is   !< The starting i-index to work on
+  integer,                   optional, intent(in)    :: ie   !< The ending i-index to work on
+  integer,                   optional, intent(in)    :: js   !< The starting j-index to work on
+  integer,                   optional, intent(in)    :: je   !< The ending j-index to work on
+  integer,                   optional, intent(in)    :: direction !< The direction flag to pass to pass_vector
 
   character(len=24) :: mesg_k
   integer :: k
@@ -326,20 +322,19 @@ subroutine check_redundant_vB3d(mesg, u_comp, v_comp, G, is, ie, js, je, &
   enddo
 end subroutine  check_redundant_vB3d
 
+!> Check duplicated points of 2-d B-grid vectors for consistency and
+!! document offending points
 subroutine check_redundant_vB2d(mesg, u_comp, v_comp, G, is, ie, js, je, &
                                 direction)
-  character(len=*),                intent(in)    :: mesg
-  type(SIS_hor_grid_type),         intent(inout) :: G
-  real, dimension(G%IsdB:,G%JsdB:), intent(in)   :: u_comp
-  real, dimension(G%IsdB:,G%JsdB:), intent(in)   :: v_comp
-  integer,               optional, intent(in)    :: is, ie, js, je
-  integer,               optional, intent(in)    :: direction
-! Arguments: u_comp - The u-component of the vector being checked.
-!  (in)      v_comp - The v-component of the vector being checked.
-!  (in)      mesg - A message indicating what is being checked.
-!  (in)      G - The ocean's grid structure.
-!  (in/opt)  is, ie, js, je - the i- and j- range of indices to check.
-!  (in/opt)  direction - the direction flag to be passed to pass_vector.
+  character(len=*),                intent(in)    :: mesg !< An identifying message
+  type(SIS_hor_grid_type),         intent(inout) :: G    !< The horizontal grid type
+  real, dimension(G%IsdB:,G%JsdB:), intent(in)   :: u_comp !< The u-component of the vector being checked
+  real, dimension(G%IsdB:,G%JsdB:), intent(in)   :: v_comp !< The v-component of the vector being checked
+  integer,               optional, intent(in)    :: is   !< The starting i-index to work on
+  integer,               optional, intent(in)    :: ie   !< The ending i-index to work on
+  integer,               optional, intent(in)    :: js   !< The starting j-index to work on
+  integer,               optional, intent(in)    :: je   !< The ending j-index to work on
+  integer,               optional, intent(in)    :: direction !< The direction flag to pass to pass_vector
 
   real :: u_nonsym(G%isd:G%ied,G%jsd:G%jed)
   real :: v_nonsym(G%isd:G%ied,G%jsd:G%jed)
@@ -402,15 +397,16 @@ subroutine check_redundant_vB2d(mesg, u_comp, v_comp, G, is, ie, js, je, &
 
 end subroutine  check_redundant_vB2d
 
+!> Check duplicated points of 3-d cell-centered scalars for consistency and
+!! document offending points
 subroutine check_redundant_sT3d(mesg, array, G, is, ie, js, je)
-  character(len=*),                     intent(in)    :: mesg
-  type(SIS_hor_grid_type),              intent(inout) :: G
-  real, dimension(G%isd:,G%jsd:,:),     intent(in)    :: array
-  integer,                    optional, intent(in)    :: is, ie, js, je
-! Arguments: array - The array being checked.
-!  (in)      mesg - A message indicating what is being checked.
-!  (in)      G - The ocean's grid structure.
-!  (in/opt)  is, ie, js, je - the i- and j- range of indices to check.
+  character(len=*),                     intent(in)    :: mesg !< An identifying message
+  type(SIS_hor_grid_type),              intent(inout) :: G    !< The horizontal grid type
+  real, dimension(G%isd:,G%jsd:,:),     intent(in)    :: array !< The array being checked
+  integer,                    optional, intent(in)    :: is   !< The starting i-index to work on
+  integer,                    optional, intent(in)    :: ie   !< The ending i-index to work on
+  integer,                    optional, intent(in)    :: js   !< The starting j-index to work on
+  integer,                    optional, intent(in)    :: je   !< The ending j-index to work on
 
   character(len=24) :: mesg_k
   integer :: k
@@ -426,16 +422,16 @@ subroutine check_redundant_sT3d(mesg, array, G, is, ie, js, je)
   enddo
 end subroutine  check_redundant_sT3d
 
-
+!> Check duplicated points of 2-d cell-centered scalars for consistency and
+!! document offending points
 subroutine check_redundant_sT2d(mesg, array, G, is, ie, js, je)
-  character(len=*),                 intent(in)    :: mesg
-  type(SIS_hor_grid_type),          intent(inout) :: G
-  real, dimension(G%isd:,G%jsd:),   intent(in)    :: array
-  integer,                optional, intent(in)    :: is, ie, js, je
-! Arguments: array - The array being checked.
-!  (in)      mesg - A message indicating what is being checked.
-!  (in)      G - The ocean's grid structure.
-!  (in/opt)  is, ie, js, je - the i- and j- range of indices to check.
+  character(len=*),                 intent(in)    :: mesg !< An identifying message
+  type(SIS_hor_grid_type),          intent(inout) :: G    !< The horizontal grid type
+  real, dimension(G%isd:,G%jsd:),   intent(in)    :: array !< The array being checked
+  integer,                optional, intent(in)    :: is   !< The starting i-index to work on
+  integer,                optional, intent(in)    :: ie   !< The ending i-index to work on
+  integer,                optional, intent(in)    :: js   !< The starting j-index to work on
+  integer,                optional, intent(in)    :: je   !< The ending j-index to work on
 
   real :: a_nonsym(G%isd:G%ied,G%jsd:G%jed)
   character(len=128) :: mesg2
@@ -471,21 +467,19 @@ subroutine check_redundant_sT2d(mesg, array, G, is, ie, js, je)
 
 end subroutine  check_redundant_sT2d
 
-
+!> Check duplicated points of 3-d A-grid vectors for consistency and
+!! document offending points
 subroutine check_redundant_vT3d(mesg, u_comp, v_comp, G, is, ie, js, je, &
                                direction)
-  character(len=*),                    intent(in)    :: mesg
-  type(SIS_hor_grid_type),             intent(inout) :: G
-  real, dimension(G%isd:,G%jsd:,:),    intent(in) :: u_comp
-  real, dimension(G%isd:,G%jsd:,:),    intent(in) :: v_comp
-  integer,                   optional, intent(in)    :: is, ie, js, je
-  integer,                   optional, intent(in)    :: direction
-! Arguments: u_comp - The u-component of the vector being checked.
-!  (in)      v_comp - The v-component of the vector being checked.
-!  (in)      mesg - A message indicating what is being checked.
-!  (in)      G - The ocean's grid structure.
-!  (in/opt)  is, ie, js, je - the i- and j- range of indices to check.
-!  (in/opt)  direction - the direction flag to be passed to pass_vector.
+  character(len=*),                    intent(in)    :: mesg !< An identifying message
+  type(SIS_hor_grid_type),             intent(inout) :: G    !< The horizontal grid type
+  real, dimension(G%isd:,G%jsd:,:),    intent(in)    :: u_comp !< The u-component of the vector being checked
+  real, dimension(G%isd:,G%jsd:,:),    intent(in)    :: v_comp !< The v-component of the vector being checked
+  integer,                   optional, intent(in)    :: is   !< The starting i-index to work on
+  integer,                   optional, intent(in)    :: ie   !< The ending i-index to work on
+  integer,                   optional, intent(in)    :: js   !< The starting j-index to work on
+  integer,                   optional, intent(in)    :: je   !< The ending j-index to work on
+  integer,                   optional, intent(in)    :: direction !< The direction flag to pass to pass_vector
 
   character(len=24) :: mesg_k
   integer :: k
@@ -501,20 +495,19 @@ subroutine check_redundant_vT3d(mesg, u_comp, v_comp, G, is, ie, js, je, &
   enddo
 end subroutine  check_redundant_vT3d
 
+!> Check duplicated points of 2-d A-grid vectors for consistency and
+!! document offending points
 subroutine check_redundant_vT2d(mesg, u_comp, v_comp, G, is, ie, js, je, &
                                direction)
-  character(len=*),                intent(in)    :: mesg
-  type(SIS_hor_grid_type),         intent(inout) :: G
-  real, dimension(G%isd:,G%jsd:),  intent(in)   :: u_comp
-  real, dimension(G%isd:,G%jsd:),  intent(in)   :: v_comp
-  integer,               optional, intent(in)    :: is, ie, js, je
-  integer,               optional, intent(in)    :: direction
-! Arguments: u_comp - The u-component of the vector being checked.
-!  (in)      v_comp - The v-component of the vector being checked.
-!  (in)      mesg - A message indicating what is being checked.
-!  (in)      G - The ocean's grid structure.
-!  (in/opt)  is, ie, js, je - the i- and j- range of indices to check.
-!  (in/opt)  direction - the direction flag to be passed to pass_vector.
+  character(len=*),                intent(in)    :: mesg !< An identifying message
+  type(SIS_hor_grid_type),         intent(inout) :: G    !< The horizontal grid type
+  real, dimension(G%isd:,G%jsd:),  intent(in)    :: u_comp !< The u-component of the vector being checked
+  real, dimension(G%isd:,G%jsd:),  intent(in)    :: v_comp !< The v-component of the vector being checked
+  integer,               optional, intent(in)    :: is   !< The starting i-index to work on
+  integer,               optional, intent(in)    :: ie   !< The ending i-index to work on
+  integer,               optional, intent(in)    :: js   !< The starting j-index to work on
+  integer,               optional, intent(in)    :: je   !< The ending j-index to work on
+  integer,               optional, intent(in)    :: direction !< The direction flag to pass to pass_vector
 
   real :: u_nonsym(G%isd:G%ied,G%jsd:G%jed)
   real :: v_nonsym(G%isd:G%ied,G%jsd:G%jed)
@@ -566,7 +559,7 @@ end subroutine  check_redundant_vT2d
 
 ! =====================================================================
 
-! This function does a checksum and redundant point check on a 3d C-grid vector.
+!> This subroutine does a checksum and redundant point check on a 3d C-grid vector.
 subroutine uvchksum_3d(mesg, u_comp, v_comp, G, halos, scalars)
   character(len=*),                  intent(in)    :: mesg   !< An identifying message
   type(SIS_hor_grid_type),           intent(inout) :: G      !< The ocean's grid structure
@@ -592,9 +585,9 @@ subroutine uvchksum_3d(mesg, u_comp, v_comp, G, halos, scalars)
 
 end subroutine uvchksum_3d
 
-! This function does a checksum and redundant point check on a 2d C-grid vector.
+!> This subroutine does a checksum and redundant point check on a 2d C-grid vector.
 subroutine uvchksum_2d(mesg, u_comp, v_comp, G, halos, scalars)
-  character(len=*),                intent(in)    :: mesg !< An identifying message
+  character(len=*),                intent(in)    :: mesg   !< An identifying message
   type(SIS_hor_grid_type),         intent(inout) :: G      !< The ocean's grid structure
   real, dimension(G%IsdB:,G%jsd:), intent(in)    :: u_comp !< The u-component of the vector
   real, dimension(G%isd:,G%JsdB:), intent(in)    :: v_comp !< The v-component of the vector
@@ -618,10 +611,10 @@ subroutine uvchksum_2d(mesg, u_comp, v_comp, G, halos, scalars)
 
 end subroutine uvchksum_2d
 
-! This function does a checksum and redundant point check on a 3d C-grid vector.
+!> This subroutine does a checksum and redundant point check on a 3d C-grid vector.
 subroutine uvchksum_3d_dG(mesg, u_comp, v_comp, G, halos)
   character(len=*),                  intent(in)    :: mesg   !< An identifying message
-  type(dyn_horgrid_type),           intent(inout) :: G      !< The ocean's grid structure
+  type(dyn_horgrid_type),            intent(inout) :: G      !< The ocean's grid structure
   real, dimension(G%IsdB:,G%jsd:,:), intent(in)    :: u_comp !< The u-component of the vector
   real, dimension(G%isd:,G%JsdB:,:), intent(in)    :: v_comp !< The v-component of the vector
   integer,                 optional, intent(in)    :: halos  !< The width of halos to check (default 0)
@@ -632,9 +625,9 @@ subroutine uvchksum_3d_dG(mesg, u_comp, v_comp, G, halos)
 
 end subroutine uvchksum_3d_dG
 
-! This function does a checksum and redundant point check on a 2d C-grid vector.
+!> This subroutine does a checksum and redundant point check on a 2d C-grid vector.
 subroutine uvchksum_2d_dG(mesg, u_comp, v_comp, G, halos)
-  character(len=*),                intent(in)    :: mesg !< An identifying message
+  character(len=*),                intent(in)    :: mesg   !< An identifying message
   type(dyn_horgrid_type),          intent(inout) :: G      !< The ocean's grid structure
   real, dimension(G%IsdB:,G%jsd:), intent(in)    :: u_comp !< The u-component of the vector
   real, dimension(G%isd:,G%JsdB:), intent(in)    :: v_comp !< The v-component of the vector
@@ -646,7 +639,7 @@ subroutine uvchksum_2d_dG(mesg, u_comp, v_comp, G, halos)
 
 end subroutine uvchksum_2d_dG
 
-! This function does a checksum and redundant point check on a 3d B-grid vector.
+!> This subroutine does a checksum and redundant point check on a 3d B-grid vector.
 subroutine Bchksum_pair_3d(mesg, u_comp, v_comp, G, halos, scalars)
   character(len=*),                   intent(in)    :: mesg   !< An identifying message
   type(SIS_hor_grid_type),            intent(inout) :: G      !< The ocean's grid structure
@@ -672,7 +665,7 @@ subroutine Bchksum_pair_3d(mesg, u_comp, v_comp, G, halos, scalars)
 
 end subroutine Bchksum_pair_3d
 
-! This function does a checksum and redundant point check on a 2d B-grid vector.
+!> This subroutine does a checksum and redundant point check on a 2d B-grid vector.
 subroutine Bchksum_pair_2d(mesg, u_comp, v_comp, G, halos, scalars, symmetric)
   character(len=*),                 intent(in)    :: mesg   !< An identifying message
   type(SIS_hor_grid_type),          intent(inout) :: G      !< The ocean's grid structure
@@ -700,7 +693,7 @@ subroutine Bchksum_pair_2d(mesg, u_comp, v_comp, G, halos, scalars, symmetric)
 
 end subroutine Bchksum_pair_2d
 
-! This function does a checksum and redundant point check on a 3d C-grid vector.
+!> This subroutine does a checksum and redundant point check on a 3d C-grid vector.
 subroutine hchksum_pair_3d(mesg, u_comp, v_comp, G, halos, scalars)
   character(len=*),                 intent(in)    :: mesg   !< An identifying message
   type(SIS_hor_grid_type),          intent(inout) :: G      !< The ocean's grid structure
@@ -726,7 +719,7 @@ subroutine hchksum_pair_3d(mesg, u_comp, v_comp, G, halos, scalars)
 
 end subroutine hchksum_pair_3d
 
-! This function does a checksum and redundant point check on a 2d C-grid vector.
+!> This subroutine does a checksum and redundant point check on a 2d C-grid vector.
 subroutine hchksum_pair_2d(mesg, u_comp, v_comp, G, halos, scalars)
   character(len=*),               intent(in)    :: mesg   !< An identifying message
   type(SIS_hor_grid_type),        intent(inout) :: G      !< The ocean's grid structure

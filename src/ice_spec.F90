@@ -1,6 +1,4 @@
-!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
-! ice_spec_mod - sea ice and SST specified from data as per GFDL climate group !
-!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
+!> sea ice and SST specified from data as per GFDL climate group
 module ice_spec_mod
 
 use fms_mod, only: open_namelist_file, check_nml_error, close_file, &
@@ -11,28 +9,25 @@ use mpp_domains_mod, only : domain2d
 use time_manager_mod, only: time_type, get_date, set_date
 use data_override_mod, only : data_override, data_override_init, data_override_unset_domains
 
-implicit none
+implicit none ;  private
+
 include 'netcdf.inc'
-private
+
 public :: get_sea_surface
 
-character(len=128), parameter :: version = '$Id: ice_spec.F90,v 1.1.2.1.6.1.2.1.2.1 2013/06/18 22:24:14 nnz Exp $'
-character(len=128), parameter :: tagname = '$Name: siena_201305_ice_sis2_5layer_dEdd_nnz $'
+logical :: module_is_initialized = .false. !< If true, this module has been called before.
 
-logical :: module_is_initialized = .false.
+logical :: mcm_ice = .false. !< When mcm_ice=.true., ice is handled as in supersource
+real    :: sst_pert = 0.     !< global temperature perturbation used for sensitivity experiments
 
-logical :: mcm_ice = .false. ! When mcm_ice=.true., ice is handled as in supersource
-real    :: sst_pert = 0.     ! global temperature perturbation used for sensitivity experiments
+real    :: minimum_ice_concentration = 0.2 !< A minimum ice concentration, nondim.
+real    :: minimum_ice_thickness     = 1.0 !< A minimum ice thickness, in m
+logical :: do_leads = .true.   !< when do_leads=false there is no fractional ice concentration
+                               !! also you should set the minimum_ice_concentration = 0.5
+logical :: sst_degk = .false.  !< when sst_degk=true the input sst data is in degrees Kelvin
+                               !! otherwise it is assumed to be in degrees Celsius
 
-real    :: minimum_ice_concentration = 0.2
-real    :: minimum_ice_thickness     = 1.0
-logical :: do_leads = .true.   ! when do_leads=false there is no fractional ice concentration
-                               ! also you should set the minimum_ice_concentration = 0.5
-logical :: sst_degk = .false.  ! when sst_degk=true the input sst data is in degrees Kelvin
-                               ! otherwise it is assumed to be in degrees Celsius
-
-!amip date for repeating single day (rsd) option
- integer :: repeat_date(3)=(/-1,-1,-1/)
+ integer :: repeat_date(3)=(/-1,-1,-1/) !< amip date for repeating single day (rsd) option
 
 namelist / ice_spec_nml / mcm_ice, do_leads, minimum_ice_concentration, &
                           minimum_ice_thickness, sst_degk, sst_pert, repeat_date
@@ -40,19 +35,24 @@ namelist / ice_spec_nml / mcm_ice, do_leads, minimum_ice_concentration, &
 contains
 
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
-! get_sea_surface - get SST, ice concentration and thickness from data         !
-!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
+!> get_sea_surface obtains SST, ice concentration and thickness from data
 subroutine get_sea_surface(Time, ts, cn, iceh, ice_domain, ice_domain_end, ts_in_K)
-  type (time_type),                         intent(in)  :: Time
-  real, dimension(:, :),                    intent(out) :: ts
-  real, dimension(size(ts,1),size(ts,2),2), intent(out) :: cn
-  real, dimension(size(ts,1),size(ts,2)),   intent(out) :: iceh
-  type(domain2d),                 optional, intent(in)  :: ice_domain
-  type(domain2d),                 optional, intent(in)  :: ice_domain_end
-  logical,                        optional, intent(in)  :: ts_in_K
+  type (time_type),         intent(in)  :: Time !< The current model time
+  real, dimension(:, :),    intent(out) :: ts !< The surface temperature in degC or degK
+  real, dimension(size(ts,1),size(ts,2),2), &
+                            intent(out) :: cn !< The fractional ocean and ice concentration
+  real, dimension(size(ts,1),size(ts,2)), &
+                            intent(out) :: iceh !< The ice thickness in m
+  type(domain2d), optional, intent(in)  :: ice_domain !< The domain used to read this data
+  type(domain2d), optional, intent(in)  :: ice_domain_end !< If present reset the data override ice
+                                                   !! domain back to this one at the end of this routine
+  logical,        optional, intent(in)  :: ts_in_K !< If true, return the surface temperature in deg K.
+                                                   !! The default is true.
 
   real, dimension(size(ts,1),size(ts,2))                :: sst, icec
 
+  character(len=128), parameter :: version = '$Id: ice_spec.F90,v 1.1.2.1.6.1.2.1.2.1 2013/06/18 22:24:14 nnz Exp $'
+  character(len=128), parameter :: tagname = '$Name: siena_201305_ice_sis2_5layer_dEdd_nnz $'
   real ::  t_sw_freeze0 = -1.8
   real ::  t_sw_freeze
   real, parameter :: T_0degC = 273.15 ! 0 degrees C in Kelvin

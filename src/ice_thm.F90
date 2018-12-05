@@ -26,34 +26,28 @@
 !                                         Mike Winton (Michael.Winton@noaa.gov)!
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
 
-! TK mod:  SLAB_ICE treatment modified to follow supersource
-!          (after Bryan 1969).  The conductive heat
-!           flux from ice to atmosphere is computed based on
-!           an effective ice thickness which ensures a minimum
-!           thickness of 1.7cm for the calculation.
-
+!> A module for specifying certain sea-ice properties
 module ice_thm_mod
 
 implicit none ; private
 
 public :: get_thermo_coefs
 
-! salinities from S(z) = 0.5*3.2*(1.0-cos(3.1416*z**(0.407/(z+0.573))))
+!>@{ salinities from S(z) = 0.5*3.2*(1.0-cos(3.1416*z**(0.407/(z+0.573))))
 ! z=[1 3 5 7]/8 ; ref: Hunke et al: CICE V. 4.0, 2008, p. 26
 real, parameter :: SI1   = 0.65      ! salinity of sea ice top layer
 real, parameter :: SI2   = 2.35      ! salinity of sea ice second layer
 real, parameter :: SI3   = 3.03      ! salinity of sea ice third layer
 real, parameter :: SI4   = 3.19      ! salinity of sea ice bottom layer
+!!@}
 
 contains
 
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
-! get_thermo_coefs - return various thermodynamic coefficients.                !
-!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
+!> get_thermo_coefs returns various thermodynamic coefficients.
 subroutine get_thermo_coefs(ice_salinity)
-  real, dimension(:), optional, intent(out) :: ice_salinity
-! Arguments: ice_salinity - The specified salinity of each layer when the
-!                           thermodynamic salinities are pre-specified.
+  real, dimension(:), optional, intent(out) :: ice_salinity !< The specified salinity of each layer
+                                            !! when the thermodynamic salinities are pre-specified.
   integer k, nk
 
   if (present(ice_salinity)) then

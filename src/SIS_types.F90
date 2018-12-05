@@ -1,34 +1,31 @@
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
-! SIS_types contains a number of common SIS types, along with subroutines to   !
-!   perform various tasks on these types, including allocation, deallocation,  !
-!   registration for restarts, and checksums.                                  !
-!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
+!> Contains a number of common SIS types, along with subroutines to perform various tasks on
+!! these types, including allocation, deallocation, registration for restarts, and checksums.
 module SIS_types
 
 use mpp_domains_mod,  only : domain2D, CORNER, EAST, NORTH, mpp_redistribute
 use fms_io_mod,       only : register_restart_field, restart_file_type
 use fms_io_mod,       only : restore_state, query_initialized
-use time_manager_mod, only : time_type, time_type_to_real
 use coupler_types_mod, only : coupler_1d_bc_type, coupler_2d_bc_type, coupler_3d_bc_type
 use coupler_types_mod, only : coupler_type_spawn, coupler_type_initialized
 use coupler_types_mod, only : coupler_type_redistribute_data, coupler_type_copy_data
 use coupler_types_mod, only : coupler_type_register_restarts
-use SIS_hor_grid, only : SIS_hor_grid_type
-use ice_grid, only : ice_grid_type
+use SIS_hor_grid,      only : SIS_hor_grid_type
+use ice_grid,          only : ice_grid_type
 
 use SIS2_ice_thm, only : ice_thermo_type, SIS2_ice_thm_CS, enth_from_TS, energy_melt_EnthS
 use SIS2_ice_thm, only : get_SIS2_thermo_coefs, temp_from_En_S
 
-use MOM_coms, only : PE_here, max_across_PEs
-use MOM_domains, only : MOM_domain_type, pass_vector, BGRID_NE, CGRID_NE, clone_MOM_domain
+use MOM_coms,          only : PE_here, max_across_PEs
+use MOM_domains,       only : MOM_domain_type, pass_vector, BGRID_NE, CGRID_NE, clone_MOM_domain
 use MOM_error_handler, only : SIS_error=>MOM_error, FATAL, WARNING, SIS_mesg=>MOM_mesg, is_root_pe
-use MOM_file_parser, only : param_file_type
-use MOM_hor_index,   only : hor_index_type
+use MOM_file_parser,   only : param_file_type
+use MOM_hor_index,     only : hor_index_type
+use MOM_time_manager,  only : time_type, time_type_to_real
 use SIS_diag_mediator, only : SIS_diag_ctrl, post_data=>post_SIS_data
 use SIS_diag_mediator, only : register_SIS_diag_field, register_static_field
-use SIS_debugging,   only : chksum, Bchksum, hchksum, uvchksum
-use SIS_debugging,   only : check_redundant_B, check_redundant_C
-use SIS_sum_output_type, only : SIS_sum_out_CS
+use SIS_debugging,     only : chksum, Bchksum, hchksum, uvchksum
+use SIS_debugging,     only : check_redundant_B, check_redundant_C
 use SIS_tracer_registry, only : SIS_tracer_registry_type
 
 implicit none ; private
@@ -50,57 +47,51 @@ public :: copy_TSF_to_TSF, redistribute_TSF_to_TSF
 public :: copy_Rad_to_Rad, redistribute_Rad_to_Rad, alloc_ice_Rad
 public :: translate_OSS_to_sOSS
 
-! This parameter sets the number of 4-D arrays for shortwave radiation and
-! albedos within SIS2.
-integer, parameter :: NBANDS=4
+integer, parameter :: NBANDS=4 !< the number of 4-D arrays for shortwave radiation and
+!! albedos within SIS2.
 
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
-! This structure contains the ice model state, and is intended to be private   !
-! to SIS2.  It is not to be shared with other components and modules, and may  !
-! use different indexing conventions than other components.                    !
-!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
+!> This structure contains the ice model state, and is intended to be private
+!! to SIS2.  It is not to be shared with other components and modules, and may
+!! use different indexing conventions than other components.
 type ice_state_type
   ! The 8 of the following 10 variables constitute the sea-ice state.
-  real, allocatable, dimension(:,:,:) :: &
-    part_size   ! The fractional coverage of a grid cell by each ice
-                ! thickness category, nondim, 0 to 1.  Category 0 is
-                ! open ocean.  The sum of part_size is 1.
+  real, allocatable, dimension(:,:,:) :: part_size !< The fractional coverage of a grid cell by
+                !! each ice thickness category, nondim, 0 to 1.  Category 0 is open ocean.
+                !!  The sum of part_size is 1.
   ! These velocities are only used on the slow ice processors
-  real, allocatable, dimension(:,:) :: &
-    u_ice_B, &  ! The pseudo-zonal and pseudo-meridional ice velocities
-    v_ice_B, &  ! along the model's grid directions on a B-grid, in m s-1.
-                ! All thickness categories are assumed to have the same
-                ! velocity.
-    u_ice_C, &  ! The pseudo-zonal and pseudo-meridional ice velocities
-    v_ice_C     ! along the model's grid directions on a C-grid, in m s-1.
-                ! All thickness categories are assumed to have the same
-                ! velocity.
-  real, allocatable, dimension(:,:,:) :: &
-    mH_pond, &  ! The mass per unit area of the pond in each category,
-                ! in units of H (usually kg m-2). mw/new
-    mH_snow, &  ! The mass per unit area of the snow in each category,
-                ! in units of H (usually kg m-2).
-    mH_ice, &   ! The mass per unit area of the ice in each category,
-                ! in units of H (usually kg m-2).
-    t_surf      ! The surface temperature, in Kelvin.
-
-  real, allocatable, dimension(:,:,:,:) :: &
-    sal_ice, &  ! The salinity of the sea ice in each category and
-                ! fractional thickness layer, in g/kg.
-    enth_ice, & ! The enthalpy of the sea ice in each category and
-                ! fractional thickness layer, in enth_unit (J/kg or rescaled).
-    enth_snow   ! The enthalpy of the snow in each category, in enth_unit.
+  real, allocatable, dimension(:,:) :: u_ice_B  !< The pseudo-zonal ice velocity along the
+                !! along the grid directions on a B-grid, in m s-1.
+                !! All thickness categories are assumed to have the same velocities.
+  real, allocatable, dimension(:,:) :: v_ice_B  !< The pseudo-meridional ice velocity along the
+                !! along the grid directions on a B-grid, in m s-1.
+  real, allocatable, dimension(:,:) :: u_ice_C  !< The pseudo-zonal ice velocity along the
+                !! along the grid directions on a C-grid, in m s-1.
+                !! All thickness categories are assumed to have the same velocities.
+  real, allocatable, dimension(:,:) :: v_ice_C  !< The pseudo-meridional ice velocity along the
+                !! along the grid directions on a C-grid, in m s-1.
 
   real, allocatable, dimension(:,:,:) :: &
-    rdg_mice    ! A diagnostic of the ice load that was formed by
-                ! ridging, in H (usually kg m-2).
+    mH_pond, &  !< The mass per unit area of the pond in each category, in units of H (usually kg m-2).
+    mH_snow, &  !< The mass per unit area of the snow in each category, in units of H (usually kg m-2).
+    mH_ice, &   !< The mass per unit area of the ice in each category, in units of H (usually kg m-2).
+    t_surf      !< The surface temperature, in Kelvin.
 
-  logical :: Cgrid_dyn ! If true use a C-grid discretization of the
-                       ! sea-ice dynamics.
+  real, allocatable, dimension(:,:,:,:) :: sal_ice  !< The salinity of the sea ice
+                !! in each category and fractional thickness layer, in g/kg.
+  real, allocatable, dimension(:,:,:,:) :: enth_ice !< The enthalpy of the sea ice
+                !! in each category and fractional thickness layer, in enth_unit (J/kg or rescaled).
+  real, allocatable, dimension(:,:,:,:) :: enth_snow !< The enthalpy of the snow
+                !! in each category and snow thickness layer, in enth_unit.
 
-  type(SIS_tracer_registry_type), pointer :: TrReg => NULL()
+  real, allocatable, dimension(:,:,:) :: &
+    rdg_mice    !< A diagnostic of the ice load that was formed by ridging, in H (usually kg m-2).
 
-  type(ice_thermo_type), pointer  :: ITV => NULL()
+  logical :: Cgrid_dyn !< If true use a C-grid discretization of the sea-ice dynamics.
+
+  type(SIS_tracer_registry_type), pointer :: TrReg => NULL() !< A pointer to the SIS tracer registry
+
+  type(ice_thermo_type), pointer  :: ITV => NULL() !< A pointer to the ice thermodyanmics type
 end type ice_state_type
 
 !> ocean_sfc_state_type contains variables that describe the ocean's surface
@@ -108,42 +99,38 @@ end type ice_state_type
 type ocean_sfc_state_type
   ! 7 of the following 9 variables describe the ocean state as seen by the sea ice.
   real, allocatable, dimension(:,:) :: &
-    s_surf , &  ! The ocean's surface salinity in g/kg.
-    SST_C  , &  ! The ocean's bulk surface temperature in degC.
-    T_fr_ocn, & ! The freezing point temperature in degC at the ocean's surface salinity.
-    u_ocn_B, &  ! The ocean's zonal velocity on B-grid points in m s-1.
-    v_ocn_B, &  ! The ocean's meridional velocity on B-grid points in m s-1.
-    u_ocn_C, &  ! The ocean's zonal and meridional velocity on C-grid
-    v_ocn_C, &  ! points, both in m s-1.
-    bheat, &    ! The upward diffusive heat flux from the ocean
-                ! to the ice at the base of the ice, in W m-2.
-    frazil , &  ! A downward heat flux from the ice into the ocean
-                ! associated with the formation of frazil ice in
-                ! the ocean integrated over a timestep, in J m-2.
-                ! This is the input value and is not changed by the ice.
-    sea_lev     ! The equivalent sea-level, after any non-levitating
-                ! ice has been converted to sea-water, as determined
-                ! by the ocean, in m.  Sea-ice only contributes by
-                ! applying pressure to the ocean that is then
-                ! (partially) converted back to its equivalent by the
-                ! ocean.
+    s_surf , &  !< The ocean's surface salinity in g/kg.
+    SST_C  , &  !< The ocean's bulk surface temperature in degC.
+    T_fr_ocn, & !< The freezing point temperature in degC at the ocean's surface salinity.
+    u_ocn_B, &  !< The ocean's zonal velocity on B-grid points in m s-1.
+    v_ocn_B, &  !< The ocean's meridional velocity on B-grid points in m s-1.
+    u_ocn_C, &  !< The ocean's zonal velocity on C-grid points, in m s-1.
+    v_ocn_C     !< The ocean's meridional velocity on C-grid points, in m s-1.
+  real, allocatable, dimension(:,:) :: bheat !< The upward diffusive heat flux from the ocean
+                !! to the ice at the base of the ice, in W m-2.
+  real, allocatable, dimension(:,:) :: frazil !< A downward heat flux from the ice into the ocean
+                !! associated with the formation of frazil ice in the ocean integrated over a
+                !! timestep, in J m-2. This is the input value and is not changed by the ice.
+  real, allocatable, dimension(:,:) :: sea_lev !< The equivalent sea-level, after any non-levitating
+                !! ice has been converted to sea-water, as determined by the ocean, in m.
+                !! Sea-ice only contributes by applying pressure to the ocean that is then
+                !! (partially) converted back to its equivalent by the ocean.
 
   type (coupler_2d_bc_type) :: &
-    tr_fields   ! A structure of fields related to properties for additional tracers.
+    tr_fields   !< A structure of fields related to properties for additional tracers.
 
 !   type(coupler_3d_bc_type)   :: ocean_fields       ! array of fields used for additional tracers
 
-  real :: kmelt ! A constant that is used in the calculation of the ocean/ice
-                ! basal heat flux, in W m-2 K-1.  This could be replaced with
-                ! an array reflecting the turbulence in the under-ice ocean
-                ! boundary layer and the effective depth of the reported value
-                ! of t_ocn.
+  real :: kmelt !< A constant that is used in the calculation of the ocean/ice basal heat flux,
+                !! in W m-2 K-1.  This could be replaced with an array reflecting the turbulence
+                !! in the under-ice ocean boundary layer and the effective depth of the reported
+                !! value of t_ocn.
 
-  logical :: Cgrid_dyn ! If true use a C-grid discretization of the
-                       ! sea-ice dynamics.
+  logical :: Cgrid_dyn !< If true use a C-grid discretization of the sea-ice dynamics.
 
-  ! diagnostic IDs for ocean surface  properties.
+  !>@{ diagnostic IDs for ocean surface properties
   integer :: id_sst=-1, id_sss=-1, id_ssh=-1, id_uo=-1, id_vo=-1, id_frazil=-1
+  !!@}
 end type ocean_sfc_state_type
 
 !> simple_OSS_type contains variables that describe the ocean's surface
@@ -152,18 +139,18 @@ type simple_OSS_type
   ! The following 5 variables describe the ocean state as seen by the
   ! atmosphere and use for the rapid thermodynamic sea ice changes.
   real, allocatable, dimension(:,:) :: &
-    s_surf , &  ! The ocean's surface salinity in g/kg.
-    SST_C  , &  ! The ocean's bulk surface temperature in degC.
-    T_fr_ocn, & ! The freezing point temperature in degC at the ocean's surface salinity.
-    u_ocn_A, &  ! The ocean's zonal surface velocity on A-grid points in m s-1.
-    v_ocn_A, &  ! The ocean's meridional surface velocity on A-grid points in m s-1.
-    u_ice_A, &  ! The sea ice's zonal velocity on A-grid points in m s-1.
-    v_ice_A, &  ! The sea ice's meridional velocity on A-grid points in m s-1.
-    bheat       ! The upward diffusive heat flux from the ocean
-                ! to the ice at the base of the ice, in W m-2.
+    s_surf , &  !< The ocean's surface salinity in g/kg.
+    SST_C  , &  !< The ocean's bulk surface temperature in degC.
+    T_fr_ocn, & !< The freezing point temperature in degC at the ocean's surface salinity.
+    u_ocn_A, &  !< The ocean's zonal surface velocity on A-grid points in m s-1.
+    v_ocn_A, &  !< The ocean's meridional surface velocity on A-grid points in m s-1.
+    u_ice_A, &  !< The sea ice's zonal velocity on A-grid points in m s-1.
+    v_ice_A     !< The sea ice's meridional velocity on A-grid points in m s-1.
+  real, allocatable, dimension(:,:) :: bheat !< The upward diffusive heat flux
+                !! from the ocean to the ice at the base of the ice, in W m-2.
 
   type (coupler_2d_bc_type) :: &
-    tr_fields   ! A structure of fields related to properties for additional tracers.
+    tr_fields   !< A structure of fields related to properties for additional tracers.
 end type simple_OSS_type
 
 
@@ -174,110 +161,86 @@ end type simple_OSS_type
 !! the fast ice thermodynamics and used during the slow ice thermodynamics or dynamics.
 type fast_ice_avg_type
 !FAST ONLY
-  integer :: avg_count  ! The number of times that surface fluxes to the ice
-                        ! have been incremented.
-  logical :: atmos_winds ! The wind stresses come directly from the atmosphere
-                         ! model and have the wrong sign.
+  integer :: avg_count   !< The number of times that surface fluxes to the ice have been incremented.
+  logical :: atmos_winds !< If true, the wind stresses come directly from the atmosphere model
+                         !! and have the wrong sign.
   ! These are the arrays that are averaged over the fast thermodynamics.  They
   ! are either used to communicate to the slow thermodynamics or diagnostics or
   ! both.
   real, allocatable, dimension(:,:,:) :: &
     ! The 3rd dimension in each of the following is ice thickness category.
-    flux_u_top  , & ! The downward flux of zonal and meridional
-    flux_v_top  , & ! momentum on an A-grid in Pa.
-    flux_sh_top , & ! The upward sensible heat flux at the ice top
-                    ! in W m-2.
-    evap_top    , & ! The upward evaporative moisture flux at
-                    ! top of the ice, in kg m-2 s-1.
-    flux_lw_top , & ! The net downward flux of longwave radiation at the
-                    ! top of the ice, in W m-2.
-    flux_lh_top , & ! The upward flux of latent heat at the top
-                    ! of the ice, in W m-2.
-    lprec_top   , & ! The downward flux of liquid precipitation
-                    ! at the top of the ice, in kg m-2 s-1.
-    fprec_top   , & ! The downward flux of frozen precipitation
-                    ! at the top of the ice, in kg m-2 s-1.
-    tmelt       , & ! Ice-top melt energy into the ice/snow in J m-2.
-    bmelt       , & ! Ice-bottom melting energy into the ice in J m-2.
-    Tskin_cat   , & ! The ice skin temperature by category, in degC.
-    sw_abs_ocn      !  The fraction of the absorbed shortwave radiation that is
-                    !  absorbed in the ocean, nondim and <=1.
-                    !  Equivalent sw_abs_ocn fields are in both the fast_ice_avg_type
-                    !  and the ice_rad_type because it is used as a part of the slow
-                    !  thermodynamic updates.
+    flux_u_top  , & !< The downward flux of zonal momentum on an A-grid in Pa.
+    flux_v_top  , & !< The downward flux of meridional momentum on an A-grid in Pa.
+    flux_sh_top , & !< The upward sensible heat flux at the ice top in W m-2.
+    evap_top    , & !< The upward evaporative moisture flux at top of the ice, in kg m-2 s-1.
+    flux_lw_top , & !< The net downward flux of longwave radiation at the top of the ice, in W m-2.
+    flux_lh_top , & !< The upward flux of latent heat at the top of the ice, in W m-2.
+    lprec_top   , & !< The downward flux of liquid precipitation at the top of the ice, in kg m-2 s-1.
+    fprec_top   , & !< The downward flux of frozen precipitation at the top of the ice, in kg m-2 s-1.
+    tmelt       , & !< Ice-top melt energy into the ice/snow in J m-2.
+    bmelt       , & !< Ice-bottom melting energy into the ice in J m-2.
+    Tskin_cat       !< The ice skin temperature by category, in degC.
+  real, allocatable, dimension(:,:,:) ::  sw_abs_ocn !< The fraction of the absorbed
+                    !! shortwave radiation that is absorbed in the ocean, nondim and <=1.
+                    !! Equivalent sw_abs_ocn fields are in both the fast_ice_avg_type and the
+                    !! ice_rad_type because it is used as a part of the slow thermodynamic updates.
   ! The last dimension in each of the following is angular and frequency radiation band.
-  real, allocatable, dimension(:,:,:,:) :: &
-    flux_sw_top     ! The downward flux of shortwave radiation at the top of
-                    ! the sea-ice in W m-2.  The fourth dimension combines
-                    ! angular orientation (direct or diffuse) and frequency
-                    ! (visible or near-IR) bands, with the integer parameters
-                    ! from this module helping to distinguish them.
-  real, allocatable, dimension(:,:,:) :: &
-    flux_sw_dn      ! The total downward shortwave flux by wavelength band,
-                    ! averaged across all thickness categories, in W m-2.
+  real, allocatable, dimension(:,:,:,:) :: flux_sw_top
+                    !< The downward flux of shortwave radiation at the top of the sea-ice in W m-2.
+                    !! The fourth dimension combines angular orientation (direct or diffuse) and
+                    !! frequency (visible or near-IR) bands, with the integer parameters
+                    !! from this module helping to distinguish them.
+  real, allocatable, dimension(:,:,:) :: flux_sw_dn !< The total downward shortwave flux
+                    !! by wavelength band, averaged across all thickness categories, in W m-2.
   real, allocatable, dimension(:,:) :: &
-    WindStr_x  , &  ! The zonal wind stress averaged over the ice
-                    ! categories on an A-grid, in Pa.
-    WindStr_y  , &  ! The meridional wind stress averaged over the
-                    ! ice categories on an A-grid, in Pa.
-    WindStr_ocn_x, & ! The zonal wind stress on open water on an A-grid, in Pa.
-    WindStr_ocn_y, & ! The meridional wind stress on open water on an A-grid, in Pa.
-    p_atm_surf , &  ! The atmospheric pressure at the top of the ice, in Pa.
-    runoff, &       ! Liquid runoff into the ocean, in kg m-2.
-    calving, &      ! Calving of ice or runoff of frozen fresh
-                    ! water into the ocean, in kg m-2.
-    runoff_hflx, &  ! The heat flux associated with runoff, based
-                    ! on the temperature difference relative to a
-                    ! reference temperature, in ???.
-    calving_hflx, & ! The heat flux associated with calving, based
-                    ! on the temperature difference relative to a
-                    ! reference temperature, in ???.
-    calving_preberg, &  ! Calving of ice or runoff of frozen fresh
-                    ! water into the ocean, exclusive of any
-                    ! iceberg contributions, in kg m-2.
-    calving_hflx_preberg, & ! The heat flux associated with calving,
-                    ! exclusive of any iceberg contributions, based on
-                    ! the temperature difference relative to a
-                    ! reference temperature, in ???.
-    Tskin_avg, &    ! The area-weighted average skin temperature across all
-                    ! ice thickness categories, in deg C, or 0 if there is
-                    ! no ice.
-    ice_free   , &  ! The fractional open water used in calculating
-                    ! WindStr_[xy]_A; nondimensional, between 0 & 1.
-    ice_cover       ! The fractional ice coverage, summed across all
-                    ! thickness categories, used in calculating
-                    ! WindStr_[xy]_A; nondimensional, between 0 & 1.
+    WindStr_x  , &  !< The zonal wind stress averaged over the ice categories on an A-grid, in Pa.
+    WindStr_y  , &  !< The meridional wind stress averaged over the ice categories on an A-grid, in Pa.
+    WindStr_ocn_x, & !< The zonal wind stress on open water on an A-grid, in Pa.
+    WindStr_ocn_y, & !< The meridional wind stress on open water on an A-grid, in Pa.
+    p_atm_surf , &  !< The atmospheric pressure at the top of the ice, in Pa.
+    runoff, &       !< Liquid runoff into the ocean, in kg m-2.
+    calving         !< Calving of ice or runoff of frozen fresh  water into the ocean, in kg m-2.
+  real, allocatable, dimension(:,:) :: runoff_hflx !< The heat flux associated with runoff, based
+                    !! on the temperature difference relative to a reference temperature, in ???.
+  real, allocatable, dimension(:,:) :: calving_hflx !< The heat flux associated with calving, based
+                    !! on the temperature difference relative to a reference temperature, in ???.
+  real, allocatable, dimension(:,:) :: calving_preberg !< Calving of ice or runoff of frozen fresh
+                    !! water into the ocean, exclusive of any iceberg contributions, in kg m-2.
+  real, allocatable, dimension(:,:) :: calving_hflx_preberg !< The heat flux associated with calving
+                    !! exclusive of any iceberg contributions, based on the temperature difference
+                    !! relative to a reference temperature, in ???.
+  real, allocatable, dimension(:,:) :: Tskin_avg !< The area-weighted average skin temperature
+                    !! across all ice thickness categories, in deg C, or 0 if there is no ice.
+  real, allocatable, dimension(:,:) :: ice_free  !< The fractional open water used in calculating
+                    !! WindStr_[xy]_A; nondimensional, between 0 & 1.
+  real, allocatable, dimension(:,:) :: ice_cover !< The fractional ice coverage, summed across all
+                    !! thickness categories, used in calculating WindStr_[xy]_A; nondimensional, between 0 & 1.
 
-  integer :: copy_calls = 0  ! The number of times this structure has been
-                    ! copied from the fast ice to the slow ice.
+  integer :: copy_calls = 0 !< The number of times this structure has been
+                    !! copied from the fast ice to the slow ice.
   type (coupler_3d_bc_type) :: &
-    tr_flux         ! A structure of additional tracer fluxes at the top
-                    ! of the sea-ice
+    tr_flux         !< A structure of additional tracer fluxes at the top of the sea-ice
 
   ! These are the arrays that are averaged over the fast thermodynamics and
   ! then interpolated into unoccupied categories for the purpose of redoing
   ! the application of the fast thermodynamics
+  real, allocatable, dimension(:,:,:) ::  flux_sh0 !< The upward sensible heat flux at the ice top
+                !! extrapolated to a skin temperature of 0 deg C, in W m-2.
+  real, allocatable, dimension(:,:,:) ::  evap0 !< The upward evaporative moisture flux
+                !! at the top of the ice extrapolated to a skin temperature of 0 deg C, in kg m-2 s-1.
+  real, allocatable, dimension(:,:,:) ::  flux_lw0 !< The net downward flux of longwave radiation
+                !! at the top of the  ice extrapolated to a skin temperature of 0 deg C, in W m-2.
   real, allocatable, dimension(:,:,:) :: &
-    flux_sh0, & ! The upward sensible heat flux at the ice top
-                ! extrapolated to a skin temperature of 0 deg C, in W m-2.
-    evap0, &    ! The upward evaporative moisture flux at the top of the ice
-                ! extrapolated to a skin temperature of 0 deg C, in kg m-2 s-1.
-    flux_lw0, & ! The net downward flux of longwave radiation at the top of the
-                ! ice extrapolated to a skin temperature of 0 deg C, in W m-2.
-    dshdt, &    ! The partial derivative of flux_sh0 with ice skin temperature
-                ! in W m-2 K-1.
-    devapdt, &  ! The partial derivative of evap0 with ice skin temperature
-                ! in kg m-2 s-1 K-1.
-    dlwdt       ! The partial derivative of flux_lw0 with ice skin temperature
-                ! in W m-2 K-1.
+    dshdt, &    !< The partial derivative of flux_sh0 with ice skin temperature in W m-2 K-1.
+    devapdt, &  !< The partial derivative of evap0 with ice skin temperature in kg m-2 s-1 K-1.
+    dlwdt       !< The partial derivative of flux_lw0 with ice skin temperature in W m-2 K-1.
 
 !SLOW ONLY
-  real, allocatable, dimension(:,:) :: &
-    frazil_left     ! The frazil heat flux that has not yet been
-                    ! consumed in making ice, in J m-2. This array
-                    ! is decremented by the ice model as the heat
-                    ! flux is used up.
+  real, allocatable, dimension(:,:) :: frazil_left !< The frazil heat flux that has not yet been
+                    !! consumed in making ice, in J m-2. This array is decremented by the ice
+                    !! model as the heat flux is used up.
 !SLOW ONLY
+  !!@{ Diagnostic IDs
   integer :: id_sh=-1, id_lh=-1, id_sw=-1, id_slp=-1
   integer :: id_lw=-1, id_snofl=-1, id_rain=-1,  id_evap=-1
   integer :: id_sw_vis_dir=-1, id_sw_vis_dif=-1, id_sw_nir_dir=-1, id_sw_nir_dif=-1
@@ -289,6 +252,7 @@ type fast_ice_avg_type
   integer :: id_evap_cat=-1, id_lw_cat=-1, id_sh_cat=-1, id_tsfc_cat=-1
   integer :: id_evap0=-1, id_lw0=-1, id_sh0=-1
   integer :: id_devdt=-1, id_dlwdt=-1, id_dshdt=-1
+  !!@}
 end type fast_ice_avg_type
 
 !> total_sfc_flux_type contains variables that describe the fluxes between the
@@ -299,31 +263,23 @@ type total_sfc_flux_type
   ! These are the arrays that are averaged over the categories and in time over
   ! the fast thermodynamics.
   real, allocatable, dimension(:,:) :: &
-    flux_u  , & ! The downward flux of zonal and meridional
-    flux_v  , & ! momentum on an A-grid in Pa.
-    flux_sh , & ! The upward sensible heat flux at the ice top
-                ! in W m-2.
-    evap    , & ! The upward evaporative moisture flux at
-                ! top of the ice, in kg m-2 s-1.
-    flux_lw , & ! The downward flux of longwave radiation at
-                ! the top of the ice, in W m-2.
-    flux_lh , & ! The upward flux of latent heat at the top
-                ! of the ice, in W m-2.
-    lprec   , & ! The downward flux of liquid precipitation
-                ! at the top of the ice, in kg m-2 s-1.
-    fprec       ! The downward flux of frozen precipitation
-                ! at the top of the ice, in kg m-2 s-1.
-  real, allocatable, dimension(:,:,:) :: &
-    flux_sw     ! The downward flux of shortwave radiation at the top of
-                ! the sea-ice in W m-2.  The third dimension combines
-                ! angular orientation (direct or diffuse) and frequency
-                ! (visible or near-IR) bands, with the integer parameters
-                ! from this module helping to distinguish them.
-  integer :: copy_calls = 0  ! The number of times this structure has been
-                ! copied from the fast ice to the slow ice.
+    flux_u  , & !< The downward flux of zonal momentum on an A-grid in Pa.
+    flux_v  , & !< The downward flux of meridional momentum on an A-grid in Pa.
+    flux_sh , & !< The upward sensible heat flux at the ice top in W m-2.
+    evap    , & !< The upward evaporative moisture flux at top of the ice, in kg m-2 s-1.
+    flux_lw , & !< The downward flux of longwave radiation at  the top of the ice, in W m-2.
+    flux_lh , & !< The upward flux of latent heat at the top of the ice, in W m-2.
+    lprec   , & !< The downward flux of liquid precipitation  at the top of the ice, in kg m-2 s-1.
+    fprec       !< The downward flux of frozen precipitation at the top of the ice, in kg m-2 s-1.
+  real, allocatable, dimension(:,:,:) :: flux_sw
+                !< The downward flux of shortwave radiation at the top of the sea-ice in W m-2.
+                !! The third dimension combines angular orientation (direct or diffuse) and
+                !! frequency (visible or near-IR) bands, with the integer parameters
+                !! from this module helping to distinguish them.
+  integer :: copy_calls = 0  !< The number of times this structure has been
+                !! copied from the fast ice to the slow ice.
   type (coupler_2d_bc_type) :: &
-    tr_flux         ! A structure of additional tracer fluxes at the top
-                    ! of the sea-ice
+    tr_flux     !< A structure of additional tracer fluxes at the top of the sea-ice
 end type total_sfc_flux_type
 
 
@@ -370,11 +326,13 @@ type ice_rad_type
                                   !! the albedos are only updated within
                                   !! set_ice_surface_state.
 
+  !!@{ Diagnostic IDs
   integer, allocatable, dimension(:)   :: id_sw_abs_ice
   integer :: id_sw_abs_sfc=-1, id_sw_abs_snow=-1, id_sw_pen=-1, id_sw_abs_ocn=-1
   integer :: id_alb=-1, id_coszen=-1, id_swdn=-1, id_lwdn=-1
   integer :: id_alb_vis_dir=-1, id_alb_vis_dif=-1, id_alb_nir_dir=-1, id_alb_nir_dif=-1
   integer :: id_tskin=-1, id_cn=-1, id_mi=-1
+  !!@}
 
 end type ice_rad_type
 
@@ -383,40 +341,31 @@ end type ice_rad_type
 type ice_ocean_flux_type
   ! These variables describe the fluxes between ice or atmosphere and the ocean.
   real, allocatable, dimension(:,:)   :: &
-    flux_sh_ocn_top , & ! The upward sensible heat flux from the ocean
-                        ! to the ice or atmosphere, in W m-2.
-    evap_ocn_top , &    ! The upward evaporative moisture flux at
-                        ! the ocean surface, in kg m-2 s-1.
-    flux_lw_ocn_top, &  ! The downward flux of longwave radiation at
-                        ! the ocean surface, in W m-2.
-    flux_lh_ocn_top, &  ! The upward flux of latent heat at the
-                        ! ocean surface, in W m-2.
-    lprec_ocn_top, &    ! The downward flux of liquid precipitation at
-                        ! the ocean surface, in kg m-2 s-1.
-    fprec_ocn_top, &    ! The downward flux of frozen precipitation at
-                        ! the ocean surface, in kg m-2 s-1.
-    flux_u_ocn, &       ! The flux of x-momentum into the ocean, in Pa,
-                        ! at locations determined by flux_uv_stagger,
-                        ! but allocated as though on an A-grid.
-    flux_v_ocn, &       ! The flux of y-momentum into the ocean, in Pa,
-                        ! at locations determined by flux_uv_stagger,
-                        ! but allocated as though on an A-grid.
-    melt_nudge, &       ! A downward fresh water flux into the ocean that
-                        ! acts to nudge the ocean surface salinity to
-                        ! facilitate the retention of sea ice, in kg m-2 s-1.
-    flux_salt           ! The flux of salt out of the ocean in kg m-2.
-  real, allocatable, dimension(:,:,:) :: &
-    flux_sw_ocn      ! The downward flux of shortwave radiation at ocean
-                     ! surface in W m-2.  The third dimension combines
-                     ! angular orientation (direct or diffuse) and frequency
-                     ! (visible or near-IR) bands, with the integer parameters
-                     ! from this module helping to distinguish them.
+    flux_sh_ocn_top, & !< The upward sensible heat flux from the ocean to the ice or atmosphere, in W m-2.
+    evap_ocn_top, &    !< The upward evaporative moisture flux at the ocean surface, in kg m-2 s-1.
+    flux_lw_ocn_top, & !< The downward flux of longwave radiation at the ocean surface, in W m-2.
+    flux_lh_ocn_top, & !< The upward flux of latent heat at the ocean surface, in W m-2.
+    lprec_ocn_top, &   !< The downward flux of liquid precipitation at the ocean surface, in kg m-2 s-1.
+    fprec_ocn_top, &   !< The downward flux of frozen precipitation at the ocean surface, in kg m-2 s-1.
+    flux_u_ocn, &      !< The flux of x-momentum into the ocean, in Pa at locations given by flux_uv_stagger.
+                       !! Note that regardless of the staggering, flux_u_ocn is allocated as though on an A-grid.
+    flux_v_ocn, &      !< The flux of y-momentum into the ocean, in Pa at locations given by flux_uv_stagger.
+                       !! Note that regardless of the staggering, flux_v_ocn is allocated as though on an A-grid.
+    stress_mag, &      !< The area-weighted time-mean of the magnitude of the stress on the ocean, in Pa.
+    melt_nudge, &      !< A downward fresh water flux into the ocean that acts to nudge the ocean
+                       !! surface salinity to facilitate the retention of sea ice, in kg m-2 s-1.
+    flux_salt          !< The flux of salt out of the ocean in kg m-2.
+  real, allocatable, dimension(:,:,:) :: flux_sw_ocn !< The downward flux of shortwave radiation
+                       !! at the ocean surface in W m-2.  The third dimension combines
+                       !! angular orientation (direct or diffuse) and frequency
+                       !! (visible or near-IR) bands, with the integer parameters
+                       !! from this module helping to distinguish them.
 
   !Iceberg fields
   real, pointer, dimension(:,:)   :: &
-    ustar_berg =>NULL(), &  ! ustar contribution below icebergs in m/s
-    area_berg =>NULL(),  &  ! fraction of grid cell covered by icebergs in m2/m2
-    mass_berg =>NULL()      ! mass of icebergs in km/m^2
+    ustar_berg =>NULL(), &  !< ustar contribution below icebergs in m/s
+    area_berg =>NULL(),  &  !< fraction of grid cell covered by icebergs in m2/m2
+    mass_berg =>NULL()      !< mass of icebergs in km/m^2
 
   ! These arrays are used for enthalpy change diagnostics in the slow thermodynamics.
   real, allocatable, dimension(:,:)   :: &
@@ -424,37 +373,30 @@ type ice_ocean_flux_type
     ! removal of water mass (liquid or frozen) from the ice model are required
     ! to close the enthalpy budget. Ice enthalpy is generally negative, so terms
     ! that add mass to the ice are generally negative.
-    Enth_Mass_in_atm , & ! The enthalpy introduced to the ice by water
-                         ! fluxes from the atmosphere, in J m-2.
-    Enth_Mass_out_atm, & ! Negative of the enthalpy extracted from the
-                         ! ice by water fluxes to the atmosphere, in J m-2.
-    Enth_Mass_in_ocn , & ! The enthalpy introduced to the ice by water
-                         ! fluxes from the ocean, in J m-2.
-    Enth_Mass_out_ocn    ! Negative of the enthalpy extracted from the
-                         ! ice by water fluxes to the ocean, in J m-2.
+    Enth_Mass_in_atm , & !< The enthalpy introduced to the ice by water fluxes from the atmosphere, in J m-2.
+    Enth_Mass_out_atm, & !< Negative of the enthalpy extracted from the ice by water fluxes to the atmosphere, in J m-2.
+    Enth_Mass_in_ocn , & !< The enthalpy introduced to the ice by water fluxes from the ocean, in J m-2.
+    Enth_Mass_out_ocn    !< Negative of the enthalpy extracted from the ice by water fluxes to the ocean, in J m-2.
 
-  integer :: stress_count ! The number of times that the stresses from the ice
-                        ! to the ocean have been incremented.
-  integer :: flux_uv_stagger = -999 ! The staggering relative to the tracer points
-                    ! points of the two wind stress components. Valid entries
-                    ! include AGRID, BGRID_NE, CGRID_NE, BGRID_SW, and CGRID_SW,
-                    ! corresponding to the community-standard Arakawa notation.
-                    ! (These are named integers taken from mpp_parameter_mod.)
-                    ! Following SIS, this is BGRID_NE by default when the sea
-                    ! ice is initialized, but here it is set to -999 so that a
-                    ! global max across ice and non-ice processors can be used
-                    ! to determine its value.
-  logical :: slp2ocean  ! If true, apply sea level pressure to ocean surface.
+  integer :: stress_count !< The number of times that the stresses from the ice to the ocean have been incremented.
+  integer :: flux_uv_stagger = -999 !< The staggering relative to the tracer points of the two wind
+                        !! stress components. Valid entries include AGRID, BGRID_NE, CGRID_NE,
+                        !! BGRID_SW, and CGRID_SW, following the Arakawa grid-staggering notation.
+                        !! (These are named integers taken from mpp_parameter_mod.)
+                        !! Following SIS, this is BGRID_NE by default when the sea ice is initialized,
+                        !! but flux_uv_stagger is set to -999 here so that a global max across ice and
+                        !! non-ice processors can be used to determine its value.
+  logical :: slp2ocean  !< If true, apply sea level pressure to ocean surface.
 
   type (coupler_2d_bc_type) :: &
-    tr_flux_ocn_top ! A structure of additional tracer fluxes at the top
-                    ! of the ocean
+    tr_flux_ocn_top !< A structure of additional tracer fluxes at the top of the ocean
 
-  ! diagnostic IDs for ice-to-ocean fluxes.
+  !>@{ diagnostic IDs for ice-to-ocean fluxes.
   integer :: id_saltf=-1
   ! The following are diagnostic IDs for iceberg-related fields.  These are only
   ! used if the iceberg code is activated.
   integer ::  id_ustar_berg=-1, id_area_berg=-1, id_mass_berg=-1
+  !!@}
 end type ice_ocean_flux_type
 
 contains
@@ -462,11 +404,11 @@ contains
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
 !> alloc_IST_arrays allocates the arrays in an ice_state_type.
 subroutine alloc_IST_arrays(HI, IG, IST, omit_velocities, omit_Tsurf)
-  type(hor_index_type),    intent(in)    :: HI
-  type(ice_grid_type),     intent(in)    :: IG
-  type(ice_state_type),    intent(inout) :: IST
-  logical, optional,       intent(in)    :: omit_velocities
-  logical, optional,       intent(in)    :: omit_Tsurf
+  type(hor_index_type), intent(in)    :: HI  !< The horizontal index type describing the domain
+  type(ice_grid_type),  intent(in)    :: IG  !< The sea-ice specific grid type
+  type(ice_state_type), intent(inout) :: IST !< A type describing the state of the sea ice
+  logical,    optional, intent(in)    :: omit_velocities !< If true, do not allocate velocity arrays
+  logical,    optional, intent(in)    :: omit_Tsurf !< If true, do not allocate the surface temperature array
 
   integer :: isd, ied, jsd, jed, CatIce, NkIce, idr
   logical :: do_vel, do_Tsurf
@@ -511,11 +453,11 @@ end subroutine alloc_IST_arrays
 !> ice_state_register_restarts registers any variables in the ice state type
 !!     that need to be includedin the restart files.
 subroutine ice_state_register_restarts(IST, G, IG, Ice_restart, restart_file)
-  type(ice_state_type),    intent(inout) :: IST
-  type(SIS_hor_grid_type), intent(in)    :: G
-  type(ice_grid_type),     intent(in)    :: IG
-  type(restart_file_type), pointer       :: Ice_restart
-  character(len=*),        intent(in)    :: restart_file
+  type(ice_state_type),    intent(inout) :: IST !< A type describing the state of the sea ice
+  type(SIS_hor_grid_type), intent(in)    :: G   !< The horizontal grid type
+  type(ice_grid_type),     intent(in)    :: IG  !< The sea-ice specific grid type
+  type(restart_file_type), pointer       :: Ice_restart !< A pointer to the restart type for the ice
+  character(len=*),        intent(in)    :: restart_file !< The name of the ice restart file
 
   integer :: idr
   type(domain2d), pointer :: mpp_domain => NULL()
@@ -580,12 +522,12 @@ end subroutine ice_state_register_restarts
 !! symmetric and non-symmetric memory restart files.
 subroutine ice_state_read_alt_restarts(IST, G, IG, Ice_restart, &
                                        restart_file, restart_dir)
-  type(ice_state_type),    intent(inout) :: IST
-  type(SIS_hor_grid_type), intent(in)    :: G
-  type(ice_grid_type),     intent(in)    :: IG
-  type(restart_file_type), pointer       :: Ice_restart
-  character(len=*),        intent(in)    :: restart_file
-  character(len=*),        intent(in)    :: restart_dir
+  type(ice_state_type),    intent(inout) :: IST !< A type describing the state of the sea ice
+  type(SIS_hor_grid_type), intent(in)    :: G   !< The horizontal grid type
+  type(ice_grid_type),     intent(in)    :: IG  !< The sea-ice specific grid type
+  type(restart_file_type), pointer       :: Ice_restart !< A pointer to the restart type for the ice
+  character(len=*),        intent(in)    :: restart_file !< The name of the ice restart file
+  character(len=*),        intent(in)    :: restart_dir !< A directory in which to find the restart file
 
   ! These are temporary variables that will be used only here for reading and
   ! then discarded.
@@ -726,14 +668,18 @@ end subroutine ice_state_read_alt_restarts
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
 !> alloc_fast_ice_avg allocates and zeros out the arrays in a fast_ice_avg_type.
 subroutine alloc_fast_ice_avg(FIA, HI, IG, interp_fluxes, gas_fluxes)
-  type(fast_ice_avg_type), pointer    :: FIA
-  type(hor_index_type),    intent(in) :: HI
-  type(ice_grid_type),     intent(in) :: IG
-  logical,                 intent(in) :: interp_fluxes
+  type(fast_ice_avg_type), pointer    :: FIA !< A type containing averages of fields
+                                             !! (mostly fluxes) over the fast updates
+  type(hor_index_type),    intent(in) :: HI  !< The horizontal index type describing the domain
+  type(ice_grid_type),     intent(in) :: IG  !< The sea-ice specific grid type
+  logical,                 intent(in) :: interp_fluxes !< If true, allocate fields to permit the
+                                             !! interpolation of a linearized version of the
+                                             !! fast fluxes into arealess categories.
   type(coupler_1d_bc_type), &
                  optional, intent(in) :: gas_fluxes !< If present, this type describes the
-                                              !! additional gas or other tracer fluxes between the
-                                              !! ocean, ice, and atmosphere.
+                                             !! additional gas or other tracer fluxes between the
+                                             !! ocean, ice, and atmosphere.
+
   integer :: isc, iec, jsc, jec, isd, ied, jsd, jed, CatIce
 
   if (.not.associated(FIA)) allocate(FIA)
@@ -828,13 +774,14 @@ end subroutine alloc_total_sfc_flux
 !!     in the restart files.
 subroutine ice_rad_register_restarts(mpp_domain, HI, IG, param_file, Rad, &
                                        Ice_restart, restart_file)
-  type(domain2d),          intent(in)    :: mpp_domain
-  type(hor_index_type),    intent(in)    :: HI
-  type(ice_grid_type),     intent(in)    :: IG
-  type(param_file_type),   intent(in)    :: param_file
-  type(ice_rad_type),      pointer       :: Rad
-  type(restart_file_type), intent(inout) :: Ice_restart
-  character(len=*),        intent(in)    :: restart_file
+  type(domain2d),          intent(in)    :: mpp_domain !< The mpp domain describing the ice decomposition
+  type(hor_index_type),    intent(in)    :: HI  !< The horizontal index type describing the domain
+  type(ice_grid_type),     intent(in)    :: IG  !< The sea-ice specific grid type
+  type(param_file_type),   intent(in)    :: param_file !< A structure to parse for run-time parameters
+  type(ice_rad_type),      pointer       :: Rad !< A structure with fields related to the absorption,
+                                                !! reflection and transmission of shortwave radiation.
+  type(restart_file_type), intent(inout) :: Ice_restart !< A pointer to the restart type for the ice
+  character(len=*),        intent(in)    :: restart_file !< The name of the ice restart file
 
   integer :: isd, ied, jsd, jed, CatIce, NkIce, idr
 
@@ -862,9 +809,10 @@ subroutine ice_rad_register_restarts(mpp_domain, HI, IG, param_file, Rad, &
 end subroutine ice_rad_register_restarts
 
 subroutine alloc_ice_rad(Rad, HI, IG)
-  type(ice_rad_type),      pointer       :: Rad
-  type(hor_index_type),    intent(in)    :: HI
-  type(ice_grid_type),     intent(in)    :: IG
+  type(ice_rad_type),      pointer       :: Rad !< A structure with fields related to the absorption,
+                                                !! reflection and transmission of shortwave radiation.
+  type(hor_index_type),    intent(in)    :: HI  !< The horizontal index type describing the domain
+  type(ice_grid_type),     intent(in)    :: IG  !< The sea-ice specific grid type
 
   integer :: isd, ied, jsd, jed, CatIce, NkIce
 
@@ -888,15 +836,20 @@ end subroutine alloc_ice_rad
 
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
 !> alloc_ice_ocean_flux allocates and zeros out the arrays in an ice_ocean_flux_type.
-subroutine alloc_ice_ocean_flux(IOF, HI, do_iceberg_fields)
-  type(ice_ocean_flux_type), pointer    :: IOF
-  type(hor_index_type),      intent(in) :: HI
-  logical,         optional, intent(in) :: do_iceberg_fields
+subroutine alloc_ice_ocean_flux(IOF, HI, do_stress_mag, do_iceberg_fields)
+  type(ice_ocean_flux_type), pointer    :: IOF !< A structure containing fluxes from the ice to
+                                               !! the ocean that are calculated by the ice model.
+  type(hor_index_type),      intent(in) :: HI  !< The horizontal index type describing the domain
+  logical,         optional, intent(in) :: do_stress_mag !< If true, allocate memory to use for
+                                               !! the magnitude of the ice-ocean stress.
+  logical,         optional, intent(in) :: do_iceberg_fields !< If true, allocate fields related
+                                               !! to exchanges with icebergs
 
   integer :: CatIce
-  logical :: alloc_bergs
+  logical :: alloc_bergs, alloc_stress_mag
 
   alloc_bergs = .false. ; if (present(do_iceberg_fields)) alloc_bergs = do_iceberg_fields
+  alloc_stress_mag = .false. ; if (present(do_stress_mag)) alloc_stress_mag = do_stress_mag
 
   if (.not.associated(IOF)) allocate(IOF)
 
@@ -911,13 +864,16 @@ subroutine alloc_ice_ocean_flux(IOF, HI, do_iceberg_fields)
   allocate(IOF%fprec_ocn_top(SZI_(HI), SZJ_(HI))) ;  IOF%fprec_ocn_top(:,:) = 0.0
   allocate(IOF%flux_u_ocn(SZI_(HI), SZJ_(HI)))    ;  IOF%flux_u_ocn(:,:) = 0.0
   allocate(IOF%flux_v_ocn(SZI_(HI), SZJ_(HI)))    ;  IOF%flux_v_ocn(:,:) = 0.0
+  if (alloc_stress_mag) then
+    allocate(IOF%stress_mag(SZI_(HI), SZJ_(HI)))  ;  IOF%stress_mag(:,:) = 0.0
+  endif
 
   allocate(IOF%Enth_Mass_in_atm(SZI_(HI), SZJ_(HI)))  ; IOF%Enth_Mass_in_atm(:,:) = 0.0
   allocate(IOF%Enth_Mass_out_atm(SZI_(HI), SZJ_(HI))) ; IOF%Enth_Mass_out_atm(:,:) = 0.0
   allocate(IOF%Enth_Mass_in_ocn(SZI_(HI), SZJ_(HI)))  ; IOF%Enth_Mass_in_ocn(:,:) = 0.0
   allocate(IOF%Enth_Mass_out_ocn(SZI_(HI), SZJ_(HI))) ; IOF%Enth_Mass_out_ocn(:,:) = 0.0
 
-  !Allocating iceberg fields (only used if pass_iceberg_area_to_ocean=.True.)
+  ! Allocating iceberg fields (only used if pass_iceberg_area_to_ocean=.True.)
   ! Please note that these are only allocated on the computational domain so that they
   ! can be passed conveniently to the iceberg code.
   if (alloc_bergs) then
@@ -1012,10 +968,11 @@ end subroutine alloc_simple_OSS
 !! domain decomposition and indexing convention (for now), but they may have
 !! different halo sizes.
 subroutine copy_IST_to_IST(IST_in, IST_out, HI_in, HI_out, IG)
-  type(ice_state_type), intent(in)    :: IST_in
-  type(ice_state_type), intent(inout) :: IST_out
-  type(hor_index_type), intent(in)    :: HI_in, HI_out
-  type(ice_grid_type),  intent(in)    :: IG
+  type(ice_state_type), intent(in)    :: IST_in !< The ice_state_type that is being copied from
+  type(ice_state_type), intent(inout) :: IST_out !< The ice_state_type that is being copied into
+  type(hor_index_type), intent(in)    :: HI_in  !< The horizontal index type for the input type
+  type(hor_index_type), intent(in)    :: HI_out !< The horizontal index type for the output type
+  type(ice_grid_type),  intent(in)    :: IG  !< The sea-ice specific grid type
 
   integer :: i, j, k, m, isc, iec, jsc, jec, ncat, NkIce
   integer :: i2, j2, i_off, j_off
@@ -1151,10 +1108,11 @@ end subroutine redistribute_IST_to_IST
 !! ice processors into a simplified version with the fields that are shared with
 !! the atmosphere and the fast ice thermodynamics.
 subroutine translate_OSS_to_sOSS(OSS, IST, sOSS, G)
-  type(ocean_sfc_state_type), intent(in)    :: OSS
-  type(ice_state_type),       intent(in)    :: IST
-  type(simple_OSS_type),      intent(inout) :: sOSS
-  type(SIS_hor_grid_type),    intent(in)    :: G
+  type(ocean_sfc_state_type), intent(in)    :: OSS !< A structure containing the arrays that describe
+                                                   !! the ocean's surface state for the ice model.
+  type(ice_state_type),       intent(in)    :: IST !< A type describing the state of the sea ice
+  type(simple_OSS_type),      intent(inout) :: sOSS !< The simple ocean surface state type that is being copied into
+  type(SIS_hor_grid_type),    intent(in)    :: G   !< The horizontal grid type
 
   integer :: i, j, k, m, n, i2, j2, k2, isc, iec, jsc, jec, i_off, j_off
   integer :: isd, ied, jsd, jed
@@ -1209,9 +1167,10 @@ end subroutine translate_OSS_to_sOSS
 !! domain decomposition and indexing convention, but they may have different
 !! halo sizes.
 subroutine copy_sOSS_to_sOSS(OSS_in, OSS_out, HI_in, HI_out)
-  type(simple_OSS_type), intent(inout) :: OSS_in
-  type(simple_OSS_type), intent(inout) :: OSS_out
-  type(hor_index_type),  intent(in)    :: HI_in, HI_out
+  type(simple_OSS_type), intent(inout) :: OSS_in  !< The simple ocean surface state type that is being copied from
+  type(simple_OSS_type), intent(inout) :: OSS_out !< The simple ocean surface state type that is being copied into
+  type(hor_index_type),  intent(in)    :: HI_in  !< The horizontal index type for the input type
+  type(hor_index_type),  intent(in)    :: HI_out !< The horizontal index type for the output type
 
   integer :: i, j, isc, iec, jsc, jec
   integer :: i2, j2, i_off, j_off
@@ -1332,10 +1291,11 @@ end subroutine redistribute_sOSS_to_sOSS
 !! domain decomposition and indexing convention, but they may have different
 !! halo sizes.
 subroutine copy_FIA_to_FIA(FIA_in, FIA_out, HI_in, HI_out, IG)
-  type(fast_ice_avg_type), intent(inout) :: FIA_in
-  type(fast_ice_avg_type), intent(inout) :: FIA_out
-  type(hor_index_type),    intent(in)    :: HI_in, HI_out
-  type(ice_grid_type),     intent(in)    :: IG
+  type(fast_ice_avg_type), intent(inout) :: FIA_in   !< The fast_ice_avg_type that is being copied from.
+  type(fast_ice_avg_type), intent(inout) :: FIA_out  !< The fast_ice_avg_type that is being copied into.
+  type(hor_index_type),    intent(in)    :: HI_in  !< The horizontal index type for the input type
+  type(hor_index_type),    intent(in)    :: HI_out !< The horizontal index type for the output type
+  type(ice_grid_type),     intent(in)    :: IG  !< The sea-ice specific grid type
 
   integer :: b, i, j, k, m, n, nb, isc, iec, jsc, jec, ncat, NkIce
   integer :: i2, j2, i_off, j_off
@@ -1685,9 +1645,10 @@ end subroutine redistribute_FIA_to_FIA
 !! domain decomposition and indexing convention, but they may have different
 !! halo sizes.
 subroutine copy_TSF_to_TSF(TSF_in, TSF_out, HI_in, HI_out)
-  type(total_sfc_flux_type), intent(inout) :: TSF_in
-  type(total_sfc_flux_type), intent(inout) :: TSF_out
-  type(hor_index_type),      intent(in)    :: HI_in, HI_out
+  type(total_sfc_flux_type), intent(inout) :: TSF_in  !< The TSF type that is being copied from
+  type(total_sfc_flux_type), intent(inout) :: TSF_out !< The TSF type that is being copied into
+  type(hor_index_type),      intent(in)    :: HI_in  !< The horizontal index type for the input type
+  type(hor_index_type),      intent(in)    :: HI_out !< The horizontal index type for the output type
 
   integer :: b, i, j, k, m, n, nb, isc, iec, jsc, jec, ncat
   integer :: i2, j2, i_off, j_off
@@ -1726,8 +1687,8 @@ end subroutine copy_TSF_to_TSF
 !> redistribute_TSF_to_TSF redistributes the computational domain of one
 !! total_sfc_flux_type into the computational domain of another total_sfc_flux_type.
 subroutine redistribute_TSF_to_TSF(TSF_in, TSF_out, domain_in, domain_out, HI_out)
-  type(total_sfc_flux_type), pointer    :: TSF_in     !< The total_sfc_flux_type that is being copied from (intent in).
-  type(total_sfc_flux_type), pointer    :: TSF_out    !< The total_sfc_flux_type that is being copied into (intent inout).
+  type(total_sfc_flux_type), pointer    :: TSF_in     !< The total_sfc_flux_type that is being copied from
+  type(total_sfc_flux_type), pointer    :: TSF_out    !< The total_sfc_flux_type that is being copied into
   type(domain2d),            intent(in) :: domain_in  !< The source data domain.
   type(domain2d),            intent(in) :: domain_out !< The target data domain.
   type(hor_index_type), optional, intent(in) :: HI_out !< The hor_index_type on the target domain; HI_out
@@ -1826,10 +1787,15 @@ end subroutine redistribute_TSF_to_TSF
 !! use the same domain decomposition and indexing convention, but they may have
 !! different halo sizes.
 subroutine copy_Rad_to_Rad(Rad_in, Rad_out, HI_in, HI_out, IG)
-  type(ice_rad_type),   intent(inout) :: Rad_in
-  type(ice_rad_type),   intent(inout) :: Rad_out
-  type(hor_index_type), intent(in)    :: HI_in, HI_out
-  type(ice_grid_type),  intent(in)    :: IG
+  type(ice_rad_type),   intent(inout) :: Rad_in !< A structure with fields related to the absorption,
+                                                !! reflection and transmission of shortwave radiation
+                                                !! that is being copied from
+  type(ice_rad_type),   intent(inout) :: Rad_out !< A structure with fields related to the absorption,
+                                                !! reflection and transmission of shortwave radiation
+                                                !! that is being copied into
+  type(hor_index_type), intent(in)    :: HI_in  !< The horizontal index type for the input type
+  type(hor_index_type), intent(in)    :: HI_out !< The horizontal index type for the output type
+  type(ice_grid_type),  intent(in)    :: IG     !< The sea-ice specific grid type
 
   integer :: b, i, j, k, m, n, nb, isc, iec, jsc, jec, ncat, NkIce
   integer :: i2, j2, i_off, j_off
@@ -2008,7 +1974,7 @@ end subroutine register_fast_to_slow_restarts
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
 !> dealloc_IST_arrays deallocates the arrays in an ice_state_type.
 subroutine dealloc_IST_arrays(IST)
-  type(ice_state_type), intent(inout) :: IST
+  type(ice_state_type), intent(inout) :: IST !< A type describing the state of the sea ice
 
   deallocate(IST%part_size, IST%mH_snow, IST%mH_ice)
   deallocate(IST%mH_pond) ! mw/new
@@ -2025,7 +1991,9 @@ end subroutine dealloc_IST_arrays
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
 !> dealloc_ocean_sfc_state deallocates the arrays in an ocean_sfc_state_type.
 subroutine dealloc_ocean_sfc_state(OSS)
-  type(ocean_sfc_state_type), pointer :: OSS
+  type(ocean_sfc_state_type), pointer :: OSS !< A structure containing the arrays that describe
+                                        !! the ocean's surface state that is dealloced here.
+
 
   if (.not.associated(OSS)) then
     call SIS_error(WARNING, "dealloc_ocean_sfc_state called with an unassociated pointer.")
@@ -2044,7 +2012,8 @@ end subroutine dealloc_ocean_sfc_state
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
 !> dealloc_simple_OSS deallocates the arrays in a simple_OSS_type.
 subroutine dealloc_simple_OSS(OSS)
-  type(simple_OSS_type), pointer :: OSS
+  type(simple_OSS_type), pointer :: OSS !< A structure containing the arrays that describe
+                                        !! the ocean's surface state that is dealloced here.
 
   if (.not.associated(OSS)) then
     call SIS_error(WARNING, "dealloc_ocean_sfc_state called with an unassociated pointer.")
@@ -2060,7 +2029,8 @@ end subroutine dealloc_simple_OSS
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
 !> dealloc_fast_ice_avg deallocates the arrays in a fast_ice_avg_type.
 subroutine dealloc_fast_ice_avg(FIA)
-  type(fast_ice_avg_type), pointer    :: FIA
+  type(fast_ice_avg_type), pointer    :: FIA !< A type containing averages of fields
+                                             !! that is being deallocated here
 
   if (.not.associated(FIA)) then
     call SIS_error(WARNING, "dealloc_fast_ice_avg called with an unassociated pointer.")
@@ -2093,7 +2063,8 @@ end subroutine dealloc_fast_ice_avg
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
 !> dealloc_total_sfc_flux deallocates the arrays in a total_sfc_flux_type.
 subroutine dealloc_total_sfc_flux(TSF)
-  type(total_sfc_flux_type), pointer    :: TSF
+  type(total_sfc_flux_type), pointer :: TSF !< A type with averaged surface fluxes
+                                            !! that is to be deallocated here.
 
   if (.not.associated(TSF)) then
     call SIS_error(WARNING, "dealloc_total_sfc_flux called with an unassociated pointer.")
@@ -2109,7 +2080,9 @@ end subroutine dealloc_total_sfc_flux
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
 !> dealloc_ice_rad deallocates the arrays in a ice_rad_type.
 subroutine dealloc_ice_rad(Rad)
-  type(ice_rad_type), pointer    :: Rad
+  type(ice_rad_type), pointer :: Rad !< A structure with fields related to
+                            !! the absorption, reflection and transmission of
+                            !! shortwave radiation that is deallocated here.
 
   if (.not.associated(Rad)) then
     call SIS_error(WARNING, "dealloc_ice_rad called with an unassociated pointer.")
@@ -2127,7 +2100,8 @@ end subroutine dealloc_ice_rad
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
 !> dealloc_ice_ocean_flux deallocates the arrays in a ice_ocean_flux_type.
 subroutine dealloc_ice_ocean_flux(IOF)
-  type(ice_ocean_flux_type), pointer    :: IOF
+  type(ice_ocean_flux_type), pointer :: IOF !< A structure containing fluxes from the ice to
+                                            !! the ocean that is deallocated here.
 
   if (.not.associated(IOF)) then
     call SIS_error(WARNING, "dealloc_ice_ocean_flux called with an unassociated pointer.")
@@ -2139,6 +2113,7 @@ subroutine dealloc_ice_ocean_flux(IOF)
   deallocate(IOF%flux_sw_ocn)
   deallocate(IOF%lprec_ocn_top, IOF%fprec_ocn_top)
   deallocate(IOF%flux_u_ocn, IOF%flux_v_ocn, IOF%flux_salt)
+  if (allocated(IOF%stress_mag)) deallocate(IOF%stress_mag)
 
   deallocate(IOF%Enth_Mass_in_atm, IOF%Enth_Mass_out_atm)
   deallocate(IOF%Enth_Mass_in_ocn, IOF%Enth_Mass_out_ocn)
@@ -2169,6 +2144,8 @@ subroutine IOF_chksum(mesg, IOF, G)
   call hchksum(IOF%fprec_ocn_top, trim(mesg)//"  IOF%fprec_ocn_top", G%HI)
   call hchksum(IOF%flux_u_ocn, trim(mesg)//"  IOF%flux_u_ocn", G%HI)
   call hchksum(IOF%flux_v_ocn, trim(mesg)//"  IOF%flux_v_ocn", G%HI)
+  if (allocated(IOF%stress_mag)) &
+    call hchksum(IOF%stress_mag, trim(mesg)//"  IOF%stress_mag", G%HI)
 
   call hchksum(IOF%Enth_Mass_in_atm, trim(mesg)//" IOF%Enth_Mass_in_atm", G%HI)
   call hchksum(IOF%Enth_Mass_out_atm, trim(mesg)//" IOF%Enth_Mass_out_atm", G%HI)
@@ -2276,13 +2253,18 @@ subroutine IST_chksum(mesg, IST, G, IG, haloshift)
 
 end subroutine IST_chksum
 
+!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
+!> Check the ice state for bad values of temperature, thickness, areal coverage,
+!! enthalpy or ice mass, and write diagnostics about any offending columns
 subroutine IST_bounds_check(IST, G, IG, msg, OSS, Rad)
-  type(ice_state_type),    intent(in)    :: IST
-  type(SIS_hor_grid_type), intent(inout) :: G
-  type(ice_grid_type),     intent(in)    :: IG
-  character(len=*),        intent(in)    :: msg
-  type(ocean_sfc_state_type), optional, intent(in) :: OSS
-  type(ice_rad_type),         optional, intent(in) :: Rad
+  type(ice_state_type),    intent(in)    :: IST !< A type describing the state of the sea ice
+  type(SIS_hor_grid_type), intent(inout) :: G   !< The horizontal grid type
+  type(ice_grid_type),     intent(in)    :: IG  !< The sea-ice specific grid type
+  character(len=*),        intent(in)    :: msg !< An identifying message
+  type(ocean_sfc_state_type), optional, intent(in) :: OSS !< A structure containing the arrays that describe
+                                                !! the ocean's surface state for the ice model.
+  type(ice_rad_type),         optional, intent(in) :: Rad !< A structure with fields related to the
+                                                !! absorption, reflection and transmission of shortwave radiation.
 
   character(len=512) :: mesg1, mesg2
   character(len=24) :: err

@@ -1,22 +1,10 @@
-!***********************************************************************
-!*                   GNU General Public License                        *
-!* This file is a part of SIS2.                                        *
-!*                                                                     *
-!* SIS2 is free software; you can redistribute it and/or modify it and *
-!* are expected to follow the terms of the GNU General Public License  *
-!* as published by the Free Software Foundation; either version 2 of   *
-!* the License, or (at your option) any later version.                 *
-!*                                                                     *
-!* SIS2 is distributed in the hope that it will be useful, but WITHOUT *
-!* ANY WARRANTY; without even the implied warranty of MERCHANTABILITY  *
-!* or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public    *
-!* License for more details.                                           *
-!*                                                                     *
-!* For the full text of the GNU General Public License,                *
-!* write to: Free Software Foundation, Inc.,                           *
-!*           675 Mass Ave, Cambridge, MA 02139, USA.                   *
-!* or see:   http://www.gnu.org/licenses/gpl.html                      *
-!***********************************************************************
+!> Handles the main updates of the ice states at the slower time-scales of the couplng or the
+!! interactions with the ocean, including the ice mass balance and related thermodynamics and
+!! salinity changes, and thermodynamic coupling with the ocean.  The radiative heating and
+!! diffusive temperature changes due to coupling with the atmosphere are handled elsewhere.
+module SIS_slow_thermo
+
+! This file is a part of SIS2.  See LICENSE.md for the license.
 
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
 !   SIS2 is a SEA ICE MODEL for coupling through the GFDL exchange grid. SIS2  !
@@ -29,9 +17,8 @@
 ! scales of the couplng or the interactions with the ocean, including the ice  !
 ! mass balance and related thermodynamics and salinity changes, and            !
 ! thermodynamic coupling with the ocean.  The radiative heating and diffusive  !
-! temperature changes due to coupling with the atmosphere are handled elsewhere.                                            !
+! temperature changes due to coupling with the atmosphere are handled elsewhere.!
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
-module SIS_slow_thermo
 
 use SIS_diag_mediator, only : enable_SIS_averaging, disable_SIS_averaging
 use SIS_diag_mediator, only : post_SIS_data, post_data=>post_SIS_data
@@ -55,8 +42,8 @@ use fms_mod, only : clock_flag_default
 use mpp_mod, only : mpp_clock_id, mpp_clock_begin, mpp_clock_end
 use mpp_mod, only : CLOCK_COMPONENT, CLOCK_LOOP, CLOCK_ROUTINE
 
-use time_manager_mod, only : time_type, time_type_to_real! , get_date, get_time
-! use time_manager_mod, only : set_date, set_time, operator(+), operator(-)
+use MOM_time_manager, only : time_type, time_type_to_real
+! use MOM_time_manager, only : operator(+), operator(-)
 ! use MOM_time_manager, only : operator(>), operator(*), operator(/), operator(/=)
 use data_override_mod, only : data_override
 
@@ -90,91 +77,94 @@ implicit none ; private
 public :: slow_thermodynamics, SIS_slow_thermo_init, SIS_slow_thermo_end
 public :: slow_thermo_CS, SIS_slow_thermo_set_ptrs
 
+!> The control structure for the SIS slow thermodynamics module
 type slow_thermo_CS ; private
-  logical :: specified_ice  ! If true, the sea ice is specified and there is
-                            ! no need for ice dynamics.
-  real :: ice_bulk_salin ! The globally constant sea ice bulk salinity, in g/kg
-                         ! that is used to calculate the ocean salt flux.
-  real :: ice_rel_salin  ! The initial bulk salinity of sea-ice relative to the
-                         ! salinity of the water from which it formed, nondim.
+  logical :: specified_ice  !< If true, the sea ice is specified and there is
+                            !! no need for ice dynamics.
+  real :: ice_bulk_salin    !< The globally constant sea ice bulk salinity, in g/kg
+                            !! that is used to calculate the ocean salt flux.
+  real :: ice_rel_salin     !< The initial bulk salinity of sea-ice relative to the
+                            !! salinity of the water from which it formed, nondim.
 
-  logical :: filling_frazil ! If true, apply frazil to fill as many categories
-                            ! as possible to fill in a uniform (minimum) amount
-                            ! of frazil in all the thinnest categories.
-                            ! Otherwise the frazil is always assigned to a
-                            ! single category with part size > 0.01.
-  real    :: fraz_fill_time ! A timescale with which the filling frazil causes
-                            ! the thinest cells to attain similar thicknesses,
-                            ! or a negative number to apply the frazil flux
-                            ! uniformly, in s.
+  logical :: filling_frazil !< If true, apply frazil to fill as many categories
+                            !! as possible to fill in a uniform (minimum) amount
+                            !! of frazil in all the thinnest categories.
+                            !! Otherwise the frazil is always assigned to a
+                            !! single category with part size > 0.01.
+  real    :: fraz_fill_time !< A timescale with which the filling frazil causes
+                            !! the thinest cells to attain similar thicknesses,
+                            !! or a negative number to apply the frazil flux
+                            !! uniformly, in s.
 
-  logical :: do_ridging     !   If true, apply a ridging scheme to the convergent
-                            ! ice.  The original SIS2 implementation is based on
-                            ! work by Torge Martin.  Otherwise, ice is compressed
-                            ! proportionately if the concentration exceeds 1.
+  logical :: do_ridging     !<   If true, apply a ridging scheme to the convergent
+                            !! ice.  The original SIS2 implementation is based on
+                            !! work by Torge Martin.  Otherwise, ice is compressed
+                            !! proportionately if the concentration exceeds 1.
 
-  logical :: do_ice_restore ! If true, restore the sea-ice toward climatology
-                            ! by applying a restorative heat flux.
-  real    :: ice_restore_timescale ! The time scale for restoring ice when
-                            ! do_ice_restore is true, in days.
+  logical :: do_ice_restore !< If true, restore the sea-ice toward climatology
+                            !! by applying a restorative heat flux.
+  real    :: ice_restore_timescale !< The time scale for restoring ice when
+                            !! do_ice_restore is true, in days.
 
-  logical :: do_ice_limit   ! Limit the sea ice thickness to max_ice_limit.
-  real    :: max_ice_limit  ! The maximum sea ice thickness, in m, when
-                            ! do_ice_limit is true.
+  logical :: do_ice_limit   !< Limit the sea ice thickness to max_ice_limit.
+  real    :: max_ice_limit  !< The maximum sea ice thickness, in m, when do_ice_limit is true.
 
-  logical :: nudge_sea_ice = .false. ! If true, nudge sea ice concentrations towards observations.
-  real    :: nudge_sea_ice_rate = 0.0 ! The rate of cooling of ice-free water that
-                              ! should be ice  covered in order to constrained the
-                              ! ice concentration to track observations.  A suggested
-                              ! value is of order 10000 W m-2.
-  real    :: nudge_stab_fac   ! A factor that determines whether the buoyancy
-                              ! flux associated with the sea ice nudging of
-                              ! warm water includes a freshwater flux so as to
-                              ! be destabilizing on net (<1), stabilizing (>1),
-                              ! or neutral (=1).  The default is 1.
-  real    :: nudge_conc_tol   ! The tolerance for mismatch in the sea ice concentations
-                              ! before nudging begins to be applied.
+  logical :: nudge_sea_ice = .false. !< If true, nudge sea ice concentrations towards observations.
+  real    :: nudge_sea_ice_rate = 0.0 !< The rate of cooling of ice-free water that should be ice
+                            !! covered in order to constrained the ice concentration to track
+                            !! observations.  A suggested value is of order 10000 W m-2.
+  real    :: nudge_stab_fac !< A factor that determines whether the buoyancy flux associated with
+                            !! the sea ice nudging of warm water includes a freshwater flux so as to
+                            !! be destabilizing on net (<1), stabilizing (>1), or neutral (=1).
+                            !!  The default is 1.
+  real    :: nudge_conc_tol !< The tolerance for mismatch in the sea ice concentations
+                            !! before nudging begins to be applied.
 
-  logical :: debug        ! If true, write verbose checksums for debugging purposes.
-  logical :: column_check ! If true, enable the heat check column by column.
-  real    :: imb_tol      ! The tolerance for imbalances to be flagged by
-                          ! column_check, nondim.
-  logical :: bounds_check ! If true, check for sensible values of thicknesses
-                          ! temperatures, fluxes, etc.
+  logical :: debug          !< If true, write verbose checksums for debugging purposes.
+  logical :: column_check   !< If true, enable the heat check column by column.
+  real    :: imb_tol        !< The tolerance for imbalances to be flagged by column_check, nondim.
+  logical :: bounds_check   !< If true, check for sensible values of thicknesses temperatures, fluxes, etc.
 
-  integer :: n_calls = 0  ! The number of times update_ice_model_slow_down
-                          ! has been called.
+  integer :: n_calls = 0    !< The number of times update_ice_model_slow_down has been called.
 
-  type(time_type), pointer :: Time ! A pointer to the ocean model's clock.
-  type(SIS_diag_ctrl), pointer :: diag ! A structure that is used to regulate the
-                                   ! timing of diagnostic output.
+  type(time_type), pointer :: Time => NULL() !< A pointer to the ocean model's clock.
+  type(SIS_diag_ctrl), pointer :: diag => NULL() !< A structure that is used to
+                                   !! regulate the timing of diagnostic output.
 
-  ! These are pointers to the control structures for subsidiary modules.
   type(SIS2_ice_thm_CS), pointer  :: ice_thm_CSp => NULL()
-
+                            !< A pointers to the control structures for a subsidiary module
   type(SIS_transport_CS), pointer :: SIS_transport_CSp => NULL()
+                            !< A pointers to the control structures for a subsidiary module
   type(SIS_sum_out_CS), pointer   :: sum_output_CSp => NULL()
+                            !< A pointers to the control structures for a subsidiary module
   type(SIS_tracer_flow_control_CS), pointer :: tracer_flow_CSp => NULL()
+                            !< A pointers to the control structures for a subsidiary module
 
-  integer :: id_qflim=-1, id_qfres=-1, id_fwnudge=-1
+  !>@{ Diagnostic IDs
+  integer :: id_qflim=-1, id_qfres=-1, id_fwnudge=-1, id_net_melt=-1, id_CMOR_melt=-1
   integer :: id_lsrc=-1, id_lsnk=-1, id_bsnk=-1, id_sn2ic=-1
+  !!@}
 end type slow_thermo_CS
 
+!>@{ CPU time clock IDs
 integer :: iceClock5, iceClock6, iceClock7
+!!@}
 
 contains
 
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
-! post_flux_diagnostics - write out any diagnostics of surface fluxes.         !
-!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
+!> write out any diagnostics of surface fluxes
 subroutine post_flux_diagnostics(IST, FIA, IOF, CS, G, IG, Idt_slow)
-  type(ice_state_type),      intent(in) :: IST
-  type(fast_ice_avg_type),   intent(in) :: FIA
-  type(ice_ocean_flux_type), intent(in) :: IOF
-  type(slow_thermo_CS),      pointer    :: CS
-  type(SIS_hor_grid_type),   intent(in) :: G
-  type(ice_grid_type),       intent(in) :: IG
-  real,                      intent(in) :: Idt_slow
+  type(ice_state_type),      intent(in) :: IST !< A type describing the state of the sea ice
+  type(fast_ice_avg_type),   intent(in) :: FIA !< A type containing averages of fields
+                                               !! (mostly fluxes) over the fast updates
+  type(ice_ocean_flux_type), intent(in) :: IOF !< A structure containing fluxes from the ice to
+                                               !! the ocean that are calculated by the ice model.
+  type(slow_thermo_CS),      pointer    :: CS  !< The control structure for the SIS_slow_thermo module
+  type(SIS_hor_grid_type),   intent(in) :: G   !< The horizontal grid type
+  type(ice_grid_type),       intent(in) :: IG  !< The sea-ice specific grid type
+  real,                      intent(in) :: Idt_slow !< The inverse of the slow thermodynamic
+                                               !! time step, in s-1
 
   real, dimension(G%isd:G%ied,G%jsd:G%jed) :: tmp2d, net_sw, sw_dn
   real :: sw_cat
@@ -315,21 +305,27 @@ end subroutine post_flux_diagnostics
 !> slow_thermodynamics takes care of slow ice thermodynamics and mass changes
 subroutine slow_thermodynamics(IST, dt_slow, CS, OSS, FIA, XSF, IOF, G, IG)
 
-  type(ice_state_type),       intent(inout) :: IST
-  real,                       intent(in)    :: dt_slow ! The thermodynamic step, in s.
-  type(slow_thermo_CS),       pointer       :: CS
-  type(ocean_sfc_state_type), intent(inout) :: OSS
-  type(fast_ice_avg_type),    intent(inout) :: FIA
-  type(total_sfc_flux_type),  pointer       :: XSF
-  type(ice_ocean_flux_type),  intent(inout) :: IOF
-  type(SIS_hor_grid_type),    intent(inout) :: G
-  type(ice_grid_type),        intent(inout) :: IG
+  type(ice_state_type),       intent(inout) :: IST !< A type describing the state of the sea ice
+  real,                       intent(in)    :: dt_slow !< The thermodynamic step, in s.
+  type(slow_thermo_CS),       pointer       :: CS  !< The control structure for the SIS_slow_thermo module
+  type(ocean_sfc_state_type), intent(inout) :: OSS !< A structure containing the arrays that describe
+                                                   !! the ocean's surface state for the ice model.
+  type(fast_ice_avg_type),    intent(inout) :: FIA !< A type containing averages of fields
+                                                   !! (mostly fluxes) over the fast updates
+  type(total_sfc_flux_type),  pointer       :: XSF !< A structure of the excess fluxes between the
+                                                   !! atmosphere and the ice or ocean relative to
+                                                   !! those stored in TSF
+  type(ice_ocean_flux_type),  intent(inout) :: IOF !< A structure containing fluxes from the ice to
+                                                   !! the ocean that are calculated by the ice model.
+  type(SIS_hor_grid_type),    intent(inout) :: G   !< The horizontal grid type
+  type(ice_grid_type),        intent(inout) :: IG  !< The sea-ice specific grid type
 
+  ! Local variables
   real, dimension(SZI_(G),SZJ_(G))   :: &
-    h_ice_input         ! The specified ice thickness, with specified_ice, in m.
+    h_ice_input    ! The specified ice thickness, with specified_ice, in m.
 
   real :: rho_ice  ! The nominal density of sea ice in kg m-3.
-  real :: Idt_slow
+  real :: Idt_slow ! The inverse of the slow thermodynamic time step, in s-1
   integer :: i, j, k, l, m, b, nb, isc, iec, jsc, jec, ncat, NkIce
   integer :: isd, ied, jsd, jed
 
@@ -483,12 +479,14 @@ subroutine slow_thermodynamics(IST, dt_slow, CS, OSS, FIA, XSF, IOF, G, IG)
 end subroutine slow_thermodynamics
 
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
-!> add_excess_fluxes adds in any excess fluxes due to ice state type into the
-!! ice_ocean_flux_type.
+!> Add in any excess fluxes due to ice state type into the ice_ocean_flux_type
 subroutine add_excess_fluxes(IOF, XSF, G)
-  type(ice_ocean_flux_type), intent(inout) :: IOF
-  type(total_sfc_flux_type), intent(in)    :: XSF
-  type(SIS_hor_grid_type),   intent(inout) :: G
+  type(ice_ocean_flux_type), intent(inout) :: IOF !< A structure containing fluxes from the ice to
+                                                  !! the ocean that are calculated by the ice model.
+  type(total_sfc_flux_type), intent(in)    :: XSF !< A structure of the excess fluxes between the
+                                                  !! atmosphere and the ice or ocean relative to
+                                                  !! those stored in TSF
+  type(SIS_hor_grid_type),   intent(inout) :: G   !< The horizontal grid type
 
   real :: sw_comb  ! A combination of two downward shortwave fluxes, in W m-2.
   integer :: i, j, k, m, n, b, nb, isc, iec, jsc, jec
@@ -561,14 +559,17 @@ end subroutine add_excess_fluxes
 !> SIS2_thermodynamics does the slow thermodynamic update of the ice state,
 !! including freezing or melting, and the accumulation of snow and frazil ice.
 subroutine SIS2_thermodynamics(IST, dt_slow, CS, OSS, FIA, IOF, G, IG)
-  type(ice_state_type),       intent(inout) :: IST
-  real,                       intent(in)    :: dt_slow ! The thermodynamic step, in s.
-  type(slow_thermo_CS),       pointer       :: CS
-  type(ocean_sfc_state_type), intent(inout) :: OSS
-  type(fast_ice_avg_type),    intent(inout) :: FIA
-  type(ice_ocean_flux_type),  intent(inout) :: IOF
-  type(SIS_hor_grid_type),    intent(inout) :: G
-  type(ice_grid_type),        intent(inout) :: IG
+  type(ice_state_type),       intent(inout) :: IST !< A type describing the state of the sea ice
+  real,                       intent(in)    :: dt_slow !< The thermodynamic step, in s.
+  type(slow_thermo_CS),       pointer       :: CS  !< The control structure for the SIS_slow_thermo module
+  type(ocean_sfc_state_type), intent(inout) :: OSS !< A structure containing the arrays that describe
+                                                   !! the ocean's surface state for the ice model.
+  type(fast_ice_avg_type),    intent(inout) :: FIA !< A type containing averages of fields
+                                                   !! (mostly fluxes) over the fast updates
+  type(ice_ocean_flux_type),  intent(inout) :: IOF !< A structure containing fluxes from the ice to
+                                                   !! the ocean that are calculated by the ice model.
+  type(SIS_hor_grid_type),    intent(inout) :: G   !< The horizontal grid type
+  type(ice_grid_type),        intent(inout) :: IG  !< The sea-ice specific grid type
 
   ! This subroutine does the thermodynamic calculations in the same order as SIS1,
   ! but with a greater emphasis on enthalpy as the dominant state variable.
@@ -615,7 +616,7 @@ subroutine SIS2_thermodynamics(IST, dt_slow, CS, OSS, FIA, IOF, G, IG)
                           ! the NkIce+1 (surface ocean layer) are both set to 0
                           ! for all tracers
 
-  type(EOS_type), pointer :: EOS
+  type(EOS_type), pointer :: EOS => NULL()
   real :: Cp_water
   real :: drho_dT(1), drho_dS(1), pres_0(1)
   real :: rho_ice     ! The nominal density of sea ice in kg m-3.
@@ -1296,6 +1297,8 @@ subroutine SIS2_thermodynamics(IST, dt_slow, CS, OSS, FIA, IOF, G, IG)
                                     scale=Idt_slow)
   if (CS%id_qflim>0) call post_data(CS%id_qflim, qflx_lim_ice, CS%diag)
   if (CS%id_qfres>0) call post_data(CS%id_qfres, qflx_res_ice, CS%diag)
+  if (CS%id_net_melt>0) call post_data(CS%id_net_melt, net_melt, CS%diag)
+  if (CS%id_CMOR_melt>0) call post_data(CS%id_CMOR_melt, net_melt, CS%diag)
 
   if (coupler_type_initialized(IOF%tr_flux_ocn_top)) &
     call coupler_type_send_data(IOF%tr_flux_ocn_top, CS%Time)
@@ -1317,13 +1320,17 @@ end subroutine SIS2_thermodynamics
 !> SIS_slow_thermo_init - initializes the parameters and diagnostics associated
 !!    with the SIS_slow_thermo module.
 subroutine SIS_slow_thermo_init(Time, G, IG, param_file, diag, CS, tracer_flow_CSp)
-  type(time_type),     target, intent(in)    :: Time   ! current time
-  type(SIS_hor_grid_type),     intent(in)    :: G      ! The horizontal grid structure
-  type(ice_grid_type),         intent(in)    :: IG     ! The sea-ice grid type
-  type(param_file_type),       intent(in)    :: param_file
-  type(SIS_diag_ctrl), target, intent(inout) :: diag
-  type(slow_thermo_CS),        pointer       :: CS
-  type(SIS_tracer_flow_control_CS), pointer  :: tracer_flow_CSp
+  type(time_type),     target, intent(in)    :: Time !< The sea-ice model's clock,
+                                                     !! set with the current model.
+  type(SIS_hor_grid_type),     intent(in)    :: G    !< The horizontal grid structure
+  type(ice_grid_type),         intent(in)    :: IG   !< The sea-ice grid type
+  type(param_file_type),       intent(in)    :: param_file !< A structure to parse for run-time parameters
+  type(SIS_diag_ctrl), target, intent(inout) :: diag !< A structure that is used to regulate diagnostic output
+  type(slow_thermo_CS),        pointer       :: CS   !< The control structure for the SIS_slow_thermo
+                                                     !! module that is initialized here
+  type(SIS_tracer_flow_control_CS), &
+                               pointer       :: tracer_flow_CSp !< A structure that is used to
+                                                     !! orchestrate the calling ice tracer packages
 
 ! This include declares and sets the variable "version".
 #include "version_variable.h"
@@ -1413,17 +1420,19 @@ subroutine SIS_slow_thermo_init(Time, G, IG, param_file, diag, CS, tracer_flow_C
                  default=1.0, do_not_log=.not.CS%nudge_sea_ice)
 
   call get_param(param_file, mdl, "DEBUG", debug, &
-                 "If true, write out verbose debugging data.", default=.false.)
+                 "If true, write out verbose debugging data.", &
+                 default=.false., debuggingParam=.true.)
   call get_param(param_file, mdl, "DEBUG_SLOW_ICE", CS%debug, &
                  "If true, write out verbose debugging data on the slow ice PEs.", &
-                 default=debug)
+                 default=debug, debuggingParam=.true.)
   call get_param(param_file, mdl, "COLUMN_CHECK", CS%column_check, &
                  "If true, add code to allow debugging of conservation \n"//&
                  "column-by-column.  This does not change answers, but \n"//&
-                 "can increase model run time.", default=.false.)
+                 "can increase model run time.", default=.false., &
+                 debuggingParam=.true.)
   call get_param(param_file, mdl, "IMBALANCE_TOLERANCE", CS%imb_tol, &
                  "The tolerance for imbalances to be flagged by COLUMN_CHECK.", &
-                 units="nondim", default=1.0e-9)
+                 units="nondim", default=1.0e-9, debuggingParam=.true.)
   call get_param(param_file, mdl, "ICE_BOUNDS_CHECK", CS%bounds_check, &
                  "If true, periodically check the values of ice and snow \n"//&
                  "temperatures and thicknesses to ensure that they are \n"//&
@@ -1439,6 +1448,12 @@ subroutine SIS_slow_thermo_init(Time, G, IG, param_file, diag, CS, tracer_flow_C
                'frozen water local bottom sink', 'kg/(m^2*yr)', missing_value=missing)
   CS%id_sn2ic = register_diag_field('ice_model','SN2IC'  ,diag%axesT1,Time, &
                'rate of snow to ice conversion', 'kg/(m^2*s)', missing_value=missing)
+  CS%id_net_melt = register_diag_field('ice_model','net_melt' ,diag%axesT1, Time, &
+               'net mass flux from ice & snow to ocean due to melting & freezing', &
+               'kg m-2 s-1', missing_value=missing)
+  CS%id_CMOR_melt = register_diag_field('ice_model','fsitherm' ,diag%axesT1, Time, &
+               'water_flux_into_sea_water_due_to_sea_ice_thermodynamics', &
+               'kg m-2 s-1', missing_value=missing)
 
   if (CS%do_ice_restore) then
     CS%id_qfres = register_diag_field('ice_model', 'QFLX_RESTORE_ICE', diag%axesT1, Time, &
@@ -1467,9 +1482,13 @@ end subroutine SIS_slow_thermo_init
 !> SIS_slow_thermo_set_ptrs can be used to set one of several pointers that
 !! are in the slow_therm_CS.
 subroutine SIS_slow_thermo_set_ptrs(CS, transport_CSp, sum_out_CSp)
-  type(slow_thermo_CS), pointer :: CS
-  type(SIS_transport_CS), optional, pointer :: transport_CSp
-  type(SIS_sum_out_CS),   optional, pointer :: sum_out_CSp
+  type(slow_thermo_CS), pointer :: CS   !< The control structure for the SIS_slow_thermo module
+  type(SIS_transport_CS), &
+              optional, pointer :: transport_CSp !< This pointer will be set to the control structure
+                                        !! for ice transport
+  type(SIS_sum_out_CS), &
+              optional, pointer :: sum_out_CSp !< This pointer will be set to the control structure
+                                        !! for globally summed diagnostics
 
   if (present(transport_CSp)) CS%SIS_transport_CSp => transport_CSp
   if (present(sum_out_CSp)) CS%sum_output_CSp => sum_out_CSp
@@ -1479,7 +1498,8 @@ end subroutine SIS_slow_thermo_set_ptrs
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
 !> SIS_slow_thermo_end deallocates any memory associated with this module.
 subroutine SIS_slow_thermo_end (CS)
-  type(slow_thermo_CS), pointer :: CS
+  type(slow_thermo_CS), pointer :: CS   !< The control structure for the SIS_slow_thermo module
+                                        !! that is deallocated here
 
   call SIS2_ice_thm_end(CS%ice_thm_CSp)
 

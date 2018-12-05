@@ -1,53 +1,8 @@
-!***********************************************************************
-!*                   GNU General Public License                        *
-!* This file is a part of SIS2.                                        *
-!*                                                                     *
-!* SIS2 is free software; you can redistribute it and/or modify it and *
-!* are expected to follow the terms of the GNU General Public License  *
-!* as published by the Free Software Foundation; either version 2 of   *
-!* the License, or (at your option) any later version.                 *
-!*                                                                     *
-!* SIS2 is distributed in the hope that it will be useful, but WITHOUT *
-!* ANY WARRANTY; without even the implied warranty of MERCHANTABILITY  *
-!* or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public    *
-!* License for more details.                                           *
-!*                                                                     *
-!* For the full text of the GNU General Public License,                *
-!* write to: Free Software Foundation, Inc.,                           *
-!*           675 Mass Ave, Cambridge, MA 02139, USA.                   *
-!* or see:   http://www.gnu.org/licenses/gpl.html                      *
-!***********************************************************************
-
-!********+*********+*********+*********+*********+*********+*********+**
-!*                                                                     *
-!*  By Andrew Shao 2016                                                *
-!*                                                                     *
-!*    This file contains an example of the code that is needed to set  *
-!*  up and use two passive tracers that represent sea-ice age.         *
-!*                                                                     *
-!*  Areal age tracer:                                                  *
-!*      For this tracer, the age of the ice in each thickness category *
-!*  that exceeds a given threshold is increased by the length of the   *
-!*  timestep. The maximum of the age tracer may be expected to be      *
-!*  similar to observational estimates of ice age.                     *
-!*  Reference: Hunke and Bitz [2009], JGR                              *
-!*                                                                     *
-!*  Mass balance age tracer:                                           *
-!*      As before, all ice that exceeds a given proscribed area is     *
-!*  increased by the length of the timestep. However, any ice that is  *
-!*  formed from seawater and added to existing ice has an age equal    *
-!*  to the length of the timestep                                      *
-!*  Reference: Lietaer et al. [2011], Ocean Modeling                   *
-!*                                                                     *
-!*                                                                     *
-!*  This file is adapted from ideal_age_example.F90 included as        *
-!*  part of the MOM6 repository. This code replaces and incorporates   *
-!*  some of the ice age tracer work implemented in SIS by Torge Martin *
-!*                                                                     *
-!*  Macros written all in capital letters are defined in SIS2_memory.h *
-!*                                                                     *
-!********+*********+*********+*********+*********+*********+*********+**
+!> A tracer package with an areal age and a mass balance age tracer.
 module ice_age_tracer
+
+! This file is a part of SIS2.  See LICENSE.md for the license
+
 ! ashao: Get all the dependencies from other modules (check against
 !   ideal_age_example.F90)
 
@@ -61,7 +16,7 @@ use SIS_utils, only             : post_avg
 use MOM_file_parser, only       : get_param, log_param, log_version, param_file_type
 use MOM_restart, only           : query_initialized, MOM_restart_CS
 use MOM_io, only                : vardesc, var_desc, query_vardesc, file_exists
-use MOM_time_manager, only      : time_type, get_time
+use MOM_time_manager, only      : time_type, time_type_to_real
 use MOM_sponge, only            : set_up_sponge_field, sponge_CS
 use MOM_error_handler, only     : SIS_error=>MOM_error, FATAL, WARNING
 use MOM_error_handler, only     : SIS_mesg=>MOM_mesg
@@ -81,98 +36,86 @@ public register_ice_age_tracer, initialize_ice_age_tracer
 public ice_age_tracer_column_physics
 public ice_age_stock, ice_age_end
 
-integer, parameter :: NTR_MAX = 2
+integer, parameter :: NTR_MAX = 2 !< The maximum number of tracers
 
+!> A structure that can be used to create arrays of tracers
 type p3d
-  real, dimension(:,:,:), pointer :: p => NULL()
+  real, dimension(:,:,:), pointer :: p => NULL() !< A pointer to a 3-d array
 end type p3d
 
+!> The controol structure for the ice age tracer module
 type, public :: ice_age_tracer_CS
-  integer :: ntr                              ! The number of tracers that are actually used.
-  character(len = 200) :: IC_file             ! The file in which the age-tracer initial values
+  integer :: ntr                              !< The number of tracers that are actually used.
+  character(len = 200) :: IC_file             !< The file in which the age-tracer initial values
                                               ! can be found, or an empty string for internal initialization.
-  type(time_type), pointer :: Time            ! A pointer to the ocean model's clock.
-  type(SIS_tracer_registry_type), pointer :: TrReg => NULL()
-  real, pointer :: tr(:,:,:,:,:) => NULL()    ! The array of tracers used in this
-                                              ! subroutine, in g m-3?
-  real, pointer :: tr_aux(:,:,:,:,:) => NULL()! The masked tracer concentration
-                                              ! for output, in g m-3.
+  type(time_type), pointer :: Time            !< A pointer to the ocean model's clock.
+  type(SIS_tracer_registry_type), pointer :: TrReg => NULL() !< A pointer to the tracer registry
+  real, pointer :: tr(:,:,:,:,:) => NULL()    !< The array of tracers used in this subroutine, in g m-3?
+  real, pointer :: tr_aux(:,:,:,:,:) => NULL() !< The masked tracer concentration for output, in g m-3.
   type(p3d), dimension(NTR_MAX) :: &
-      tr_adx, &                               ! Tracer zonal advective fluxes in g m-3 m3 s-1.
-      tr_ady                                  ! Tracer meridional advective fluxes in g m-3 m3 s-1.
+      tr_adx, &                               !< Tracer zonal advective fluxes in g m-3 m3 s-1.
+      tr_ady                                  !< Tracer meridional advective fluxes in g m-3 m3 s-1.
 
-  real, pointer :: ocean_BC(:,:,:,:)=>NULL()  ! Ocean boundary value of the tracer by category
-  real, pointer :: snow_BC(:,:,:,:)=>NULL()   ! Snow boundary value of the tracer by category
+  real, pointer :: ocean_BC(:,:,:,:)=>NULL()  !< Ocean boundary value of the tracer by category
+  real, pointer :: snow_BC(:,:,:,:)=>NULL()   !< Snow boundary value of the tracer by category
 
   real, dimension(NTR_MAX) :: &
-      IC_val = 0.0, &                         ! The (uniform) initial condition value.
-      young_val = 0.0, &                      ! The value assigned to tr at the surface.
-      land_val = -1.0, &                      ! The value of tr used where land is masked out.
-      tracer_start_year = 0.0                 ! The year in which tracers start aging, or at which the
-                                              ! surface value equals young_val, in years.
-  logical :: mask_tracers                     ! If true, tracers are masked out in massless layers.
-  logical :: tracers_may_reinit               ! If true, tracers may go through the
-                                              ! initialization code if they are not found in the
-                                              ! restart files.
-  logical :: tracer_ages(NTR_MAX)             ! Flag if the tracer ages as a function of time
-  logical :: new_ice_is_sink(NTR_MAX)         ! Flag for whether the formation of new ice acts
-                                              ! as a sink for age
-  logical :: advect_vertical(NTR_MAX)         ! Whether the tracer should be advected "vertically"
-                                              ! to thicker ice
-  logical :: uniform_vertical(NTR_MAX)        ! Whether the tracer should uniform across ice thickness
-                                              ! categories if so, "mix" the tracer by setting it to
-                                              ! the maximum age at the grid pont
-  logical :: do_ice_age_areal
-  logical :: do_ice_age_mass
-  real    :: min_thick_age, min_conc_age
+      IC_val = 0.0, &                         !< The (uniform) initial condition value.
+      young_val = 0.0, &                      !< The value assigned to tr at the surface.
+      land_val = -1.0                         !< The value of tr used where land is masked out.
+  real, dimension(NTR_MAX) :: tracer_start_year = 0.0 !< The year in which tracers start aging, or at which the
+                                              !! surface value equals young_val, in years.
+  logical :: mask_tracers                     !< If true, tracers are masked out in massless layers.
+  logical :: tracers_may_reinit               !< If true, tracers may go through the initialization code
+                                              !! if they are not found in the restart files.
+  logical :: tracer_ages(NTR_MAX)             !< Flag if the tracer ages as a function of time
+  logical :: new_ice_is_sink(NTR_MAX)         !< Flag for whether the formation of new ice acts as a sink for age
+  logical :: advect_vertical(NTR_MAX)         !< Whether the tracer should be advected "vertically" to thicker ice
+  logical :: uniform_vertical(NTR_MAX)        !< Whether the tracer should uniform across ice thickness
+                                              !! categories if so, "mix" the tracer by setting it to
+                                              !! the maximum age at the grid pont
+  logical :: do_ice_age_areal                 !< If true, use the areal age tracer
+  logical :: do_ice_age_mass                  !< If true, use the areal age tracer
+  real    :: min_thick_age                    !< The minimum thickness age
+  real    :: min_conc_age                     !< The minimum concentration age
 
+  !>@{ Diagnostic IDs
   integer, dimension(NTR_MAX) :: &
       id_tracer = -1, id_tr_adx = -1, id_tr_ady = -1, id_avg =-1 ! Indices used for the diagnostic
                                                                  ! mediator
-  integer, dimension(NTR_MAX) :: nlevels
+  !!@}
+  integer, dimension(NTR_MAX) :: nlevels      !< The number of vertical levels
 
-  type(SIS_diag_ctrl), pointer :: diag ! A structure that is used to regulate the
-                             ! timing of diagnostic output.
+  type(SIS_diag_ctrl), pointer :: diag=>NULL() !< A structure that is used to regulate the
+                                               !! timing of diagnostic output.
 
-  real :: min_mass                            ! Minimum mass of ice in thickness category for it
-                                              ! to 'exist'
-
-  type(vardesc) :: tr_desc(NTR_MAX)
+  real :: min_mass                            !< Minimum mass of ice in thickness category for it to 'exist'
+  type(vardesc) :: tr_desc(NTR_MAX)           !< Descriptions and metadata for the tracers
 end type ice_age_tracer_CS
 
 contains
 
+!> Register tracers from the ice age package
 logical function register_ice_age_tracer(G, IG, param_file, CS, diag, TrReg, &
-    Ice_restart, restart_file)
-  type(sis_hor_grid_type),                intent(in) :: G
-  type(ice_grid_type),                    intent(in) :: IG
-  type(param_file_type),                  intent(in) :: param_file
-  type(ice_age_tracer_CS),                pointer    :: CS
-  type(SIS_diag_ctrl),                    target     :: diag
-  type(SIS_tracer_registry_type),         pointer    :: TrReg
-  type(restart_file_type),                intent(inout) :: Ice_restart
-  character(len=*)                                   :: restart_file
-  ! This subroutine is used to age register tracer fields and subroutines
-  ! to be used with SIS.
-  ! Arguments:
-  !  (in)      Ice - The ice data type
-  !  (in)      G - The ocean's grid structure.
-  !  (in)      IG - Ice model's grid structure
-  !  (in)      param_file - A structure indicating the open file to parse for
-  !                         model parameter values.
-  !  (in/out)  CS - A pointer that is set to point to the control structure
-  !                 for the ice age tracer
-  !  (in)      diag - A structure that is used to regulate diagnostic output.
-  !  (in/out)  TrReg - A pointer that is set to point to the control structure
-  !                  for the tracer advection and diffusion module.
-  !  (in)      restart_file - Name of the restart file for the ice model.
+                                         Ice_restart, restart_file)
+  type(sis_hor_grid_type),          intent(in) :: G   !< The horizontal grid type
+  type(ice_grid_type),              intent(in) :: IG  !< The sea-ice specific grid type
+  type(param_file_type),            intent(in) :: param_file !< A structure to parse for run-time parameters
+  type(ice_age_tracer_CS),          pointer    :: CS  !<  A pointer that is set to point to the control
+                                                      !! structure for the ice age tracer
+  type(SIS_diag_ctrl),              target     :: diag !< A structure that is used to regulate diagnostic output
+  type(SIS_tracer_registry_type),   pointer    :: TrReg !< A pointer to thie SIS tracer registry
+  type(restart_file_type),          intent(inout) :: Ice_restart !< The SIS restart structure
+  character(len=*),                 intent(in) :: restart_file !< The full path to the restart file.
+
+  ! This subroutine is used to age register tracer fields and subroutines to be used with SIS.
 
   ! This include declares and sets the variable "version".
 #include "version_variable.h"
   character(len=40)  :: mdl = "ice_age_tracer" ! This module's name.
   character(len=200) :: inputdir ! The directory where the input files are.
   character(len=48)  :: var_name ! The variable's name.
-  real, dimension(:,:,:), pointer :: ocean_BC_ptr, snow_BC_ptr
+  real, dimension(:,:,:), pointer :: ocean_BC_ptr => NULL(), snow_BC_ptr => NULL()
   integer :: isc, iec, jsc, jec, k, m, tr
   isc = G%isc ; iec = G%iec ; jsc = G%jsc ; jec = G%jec
 
@@ -271,23 +214,20 @@ logical function register_ice_age_tracer(G, IG, param_file, CS, diag, TrReg, &
 end function register_ice_age_tracer
 
 
+!> Initialize tracers and diagnostics from the ice age package
 subroutine initialize_ice_age_tracer( day, G, IG, CS, is_restart )
-  type(time_type), target,                intent(in) :: day
-  type(sis_hor_grid_type),                intent(in) :: G
-  type(ice_grid_type),                    intent(in) :: IG
-  type(ice_age_tracer_CS),                pointer    :: CS
-  logical,                                intent(in) :: is_restart
+  type(time_type), target, intent(in) :: day !< The current model time
+  type(sis_hor_grid_type), intent(in) :: G   !< The horizontal grid type
+  type(ice_grid_type),     intent(in) :: IG  !< The sea-ice specific grid type
+  type(ice_age_tracer_CS), pointer    :: CS  !< The control structure returned by a
+                                             !! previous call to register_ideal_age_tracer.
+  logical,                 intent(in) :: is_restart !< A flag indicating whether this run
+                                             !! segment is being initialized from a restart file
 
   !   This subroutine initializes the CS%ntr tracer fields in tr(:,:,:,:)
   ! and it sets up the tracer output.
 
-  ! Arguments: restart - .true. if the fields have already been read from
-  !                     a restart file.
-  !  (in)      day - Time of the start of the run.
-  !  (in)      G - The ocean's grid structure.
-  !  (in)      IG - The ice model's grid structure.
-  !  (in/out)  CS - The control structure returned by a previous call to
-  !                 register_ideal_age_tracer.
+  ! Local variables
   real, parameter   :: missing = -1.0e34
   character(len=24) :: name     ! A variable's name in a NetCDF file.
   character(len=72) :: longname ! The long name of that variable.
@@ -343,22 +283,21 @@ subroutine initialize_ice_age_tracer( day, G, IG, CS, is_restart )
 
 end subroutine initialize_ice_age_tracer
 
+!> Change the ice age tracers due to ice column physics like melting and freezing
 subroutine ice_age_tracer_column_physics(dt, G, IG, CS,  mi, mi_old)
-  real,                                       intent(in) :: dt
-  type(sis_hor_grid_type),                    intent(in) :: G
-  type(ice_grid_type),                        intent(in) :: IG
-  type(ice_age_tracer_CS)                                :: CS
-  real, dimension(SZI_(G),SZJ_(G),SZCAT_(IG)),intent(in) :: mi
-  real, dimension(SZI_(G),SZJ_(G),SZCAT_(IG)),intent(in) :: mi_old
+  real,                    intent(in) :: dt  !< The amount of time covered by this call, in s.
+  type(SIS_hor_grid_type), intent(in) :: G   !< The horizontal grid type
+  type(ice_grid_type),     intent(in) :: IG  !< The sea-ice specific grid type
+  type(ice_age_tracer_CS), pointer    :: CS  !< The control structure returned by a
+                                             !! previous call to register_ideal_age_tracer.
+  real, dimension(SZI_(G),SZJ_(G),SZCAT_(IG)), &
+                           intent(in) :: mi  !< Mass of ice in a given category in kg m-2 at the
+                                             !! end of the timestep
+  real, dimension(SZI_(G),SZJ_(G),SZCAT_(IG)), &
+                           intent(in) :: mi_old  !< Mass of ice in a given category in kg m-2 at the
+                                             !! beginning of the timestep
 
-  ! Arguments:
-  !  (in)      dt - The amount of time covered by this call, in s.
-  !  (in)      mi_old - Mass of ice at the beginning of the ice model timestep
-  !  (in)      G - The ocean model's grid structure.
-  !  (in)      IG - The ice model's grid structure.
-  !  (in)      CS - The control structure returned by a previous call to
-  !                 register_ideal_age_tracer.
-
+  ! Local variables
   real :: Isecs_per_year  ! The number of seconds in a year.
   real :: year            ! The time in years.
   real :: dt_year         ! Timestep in units of years
@@ -367,7 +306,6 @@ subroutine ice_age_tracer_column_physics(dt, G, IG, CS,  mi, mi_old)
   real :: max_age         ! Maximum age at a grid point
   real, dimension(SZI_(G),SZJ_(G)) :: vertsum_mi, vertsum_mi_old
   real, dimension(SZI_(G),SZJ_(G),SZCAT_(IG)) :: tr_avg
-  integer :: secs, days   ! Integer components of the time type.
   integer :: i, j, k, m, tr
   integer :: isc, iec, jsc, jec
 
@@ -380,8 +318,7 @@ subroutine ice_age_tracer_column_physics(dt, G, IG, CS,  mi, mi_old)
 
   min_age = 0.0
 
-  call get_time(CS%Time, secs, days)
-  year = (86400.0*days + real(secs)) * Isecs_per_year
+  year = time_type_to_real(CS%Time) * Isecs_per_year
 
   do tr=1,CS%ntr
     ! Increment the age of the ice if it exists
@@ -443,30 +380,24 @@ subroutine ice_age_tracer_column_physics(dt, G, IG, CS,  mi, mi_old)
 
 end subroutine ice_age_tracer_column_physics
 
+!> Calculate stock amounts for the ice age tracers
 function ice_age_stock(mi, stocks, G, IG, CS, names, units)
-  real, dimension(:),                          intent(out)   :: stocks
-  type(sis_hor_grid_type),                     intent(in)    :: G
-  type(ice_grid_type),                         intent(in)    :: IG
-  real, dimension(SZI_(G),SZJ_(G),SZCAT_(IG)), intent(in)    :: mi
-  type(ice_age_tracer_CS), pointer                           :: CS
-  character(len=*), dimension(:),              intent(out)   :: names
-  character(len=*), dimension(:),              intent(out)   :: units
+  real, dimension(:),             intent(out) :: stocks !< The volume integrated amounts of tracers
+  type(sis_hor_grid_type),        intent(in)  :: G   !< The horizontal grid type
+  type(ice_grid_type),            intent(in)  :: IG  !< The sea-ice specific grid type
+  real, dimension(SZI_(G),SZJ_(G),SZCAT_(IG)), &
+                                  intent(in)  :: mi  !< Mass of ice in a given category in kg m-2, used for summing
+  type(ice_age_tracer_CS),        pointer     :: CS  !< The control structure returned by a
+                                                     !! previous call to register_ideal_age_tracer.
+  character(len=*), dimension(:), intent(out) :: names !< The names of the summed tracer stocks.
+  character(len=*), dimension(:), intent(out) :: units !< The units of the tracer stocks
 
-  integer ice_age_stock
+  integer :: ice_age_stock !<  the number of stocks calculated here.
   ! This function calculates the mass-weighted integral of all tracer stocks,
   ! returning the number of stocks it has calculated.  If the stock_index
   ! is present, only the stock corresponding to that coded index is returned.
 
-  ! Arguments: stocks - the mass-weighted integrated amount of each tracer,
-  !                     in kg times concentration units.
-  !  (in)      G - The ocean's grid structure.
-  !  (in)      G - The ice model's grid structure.
-  !  (in)      CS - The control structure returned by a previous call to
-  !                 register_ideal_age_tracer.
-  !  (out)     names - the names of the stocks calculated.
-  !  (out)     units - the units of the stocks calculated.
-  ! Return value: the number of stocks calculated here.
-
+  ! Local variables
   integer :: i, j, k, m, tr, nstocks
   integer :: isc, iec, jsc, jec
   real :: avg_tr
@@ -495,8 +426,10 @@ function ice_age_stock(mi, stocks, G, IG, CS, names, units)
 
 end function ice_age_stock
 
+!> Deallocate memory associated with the ice age module
 subroutine ice_age_end(CS)
-  type(ice_age_tracer_CS), pointer :: CS
+  type(ice_age_tracer_CS), pointer :: CS  !< The control structure returned by a previous call to
+                                          !! register_ideal_age_tracer that is deallocated here.
   integer :: m
 
   if (associated(CS)) then
@@ -512,5 +445,29 @@ subroutine ice_age_end(CS)
     deallocate(CS)
   endif
 end subroutine ice_age_end
+
+!*  By Andrew Shao 2016                                                *
+!*                                                                     *
+!*    This file contains an example of the code that is needed to set  *
+!*  up and use two passive tracers that represent sea-ice age.         *
+!*                                                                     *
+!*  Areal age tracer:                                                  *
+!*      For this tracer, the age of the ice in each thickness category *
+!*  that exceeds a given threshold is increased by the length of the   *
+!*  timestep. The maximum of the age tracer may be expected to be      *
+!*  similar to observational estimates of ice age.                     *
+!*  Reference: Hunke and Bitz [2009], JGR                              *
+!*                                                                     *
+!*  Mass balance age tracer:                                           *
+!*      As before, all ice that exceeds a given proscribed area is     *
+!*  increased by the length of the timestep. However, any ice that is  *
+!*  formed from seawater and added to existing ice has an age equal    *
+!*  to the length of the timestep                                      *
+!*  Reference: Lietaer et al. [2011], Ocean Modeling                   *
+!*                                                                     *
+!*                                                                     *
+!*  This file is adapted from ideal_age_example.F90 included as        *
+!*  part of the MOM6 repository. This code replaces and incorporates   *
+!*  some of the ice age tracer work implemented in SIS by Torge Martin *
 
 end module ice_age_tracer

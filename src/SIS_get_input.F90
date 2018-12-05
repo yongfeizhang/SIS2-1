@@ -1,33 +1,8 @@
+!> Reads the SIS2 namelist input, which indicates which directories to use for certain types of
+!! input and output, and where to look for the full parsable input file(s).
 module SIS_get_input
-!***********************************************************************
-!*                   GNU General Public License                        *
-!* This file is a part of SIS2.                                        *
-!*                                                                     *
-!* SIS2 is free software; you can redistribute it and/or modify it and *
-!* are expected to follow the terms of the GNU General Public License  *
-!* as published by the Free Software Foundation; either version 2 of   *
-!* the License, or (at your option) any later version.                 *
-!*                                                                     *
-!* SIS2 is distributed in the hope that it will be useful, but WITHOUT *
-!* ANY WARRANTY; without even the implied warranty of MERCHANTABILITY  *
-!* or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public    *
-!* License for more details.                                           *
-!*                                                                     *
-!* For the full text of the GNU General Public License,                *
-!* write to: Free Software Foundation, Inc.,                           *
-!*           675 Mass Ave, Cambridge, MA 02139, USA.                   *
-!* or see:   http://www.gnu.org/licenses/gpl.html                      *
-!***********************************************************************
 
-!********+*********+*********+*********+*********+*********+*********+**
-!*                                                                     *
-!*  By Robert Hallberg, July 2013                                      *
-!*                                                                     *
-!*    The subroutine in this file reads the MOM6 namelist input, which *
-!*  indicates which directories to use for certain types of input and  *
-!*  output, and where to look for the full parsable input file(s).     *
-!*                                                                     *
-!********+*********+*********+*********+*********+*********+*********+**
+! This file is a part of SIS2. See LICENSE.md for the license.
 
 use MOM_error_handler, only : SIS_error=>MOM_error, FATAL, WARNING, is_root_pe
 use MOM_file_parser, only : open_param_file, param_file_type, read_param
@@ -40,22 +15,26 @@ public Get_SIS_Input
 
 ! This structure is to simplify communication with the calling code.
 
+!> Container for paths and parameter file names.
 type, public :: directories
   character(len=240) :: &
-    restart_input_dir = ' ',& ! The directory to read restart and input files.
-    restart_output_dir = ' ',&! The directory into which to write restart files.
-    output_directory = ' ', & ! The directory to use to write the model output.
-    input_filename  = ' '     ! A string that indicates the input files or how
-                              ! the run segment should be started.
+    restart_input_dir = ' ',& !< The directory to read restart and input files.
+    restart_output_dir = ' ',&!< The directory into which to write restart files.
+    output_directory = ' ', & !< The directory to use to write the model output.
+    input_filename  = ' '     !< A string that indicates the input files or how
+                              !! the run segment should be started.
 end type directories
 
 contains
 
+!> Get_SIS_input reads the SIS namelist entries to see if the run is to be started from
+!! a saved restart file, and get the names of the parameter files, I/O directories.
 subroutine Get_SIS_Input(param_file, dirs, check_params, component, ensemble_num)
-  type(param_file_type), optional, intent(out) :: param_file
-  type(directories),     optional, intent(out) :: dirs
-  logical,               optional, intent(in)  :: check_params
-  character(len=*),      optional, intent(in)  :: component
+  type(param_file_type), optional, intent(out) :: param_file !< A structure to parse for run-time parameters
+  type(directories),     optional, intent(out) :: dirs         !< Container for paths and parameter file names.
+  logical,               optional, intent(in)  :: check_params !< If present and False will stop error checking for
+                                                               !! run-time parameters.
+  character(len=*),      optional, intent(in)  :: component    !< An alternate component name, the default is "SIS"
   integer,               optional, intent(in)  :: ensemble_num !< The ensemble id of the current member
 
 !    See if the run is to be started from saved conditions, and get  !

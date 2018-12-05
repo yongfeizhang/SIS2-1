@@ -1,23 +1,7 @@
+!> Update sea-ice dynamics using elastic-viscous-plastic rheology with a B-grid discretization
 module SIS_dyn_bgrid
-!***********************************************************************
-!*                   GNU General Public License                        *
-!* This file is a part of SIS2.                                        *
-!*                                                                     *
-!* SIS2 is free software; you can redistribute it and/or modify it and *
-!* are expected to follow the terms of the GNU General Public License  *
-!* as published by the Free Software Foundation; either version 2 of   *
-!* the License, or (at your option) any later version.                 *
-!*                                                                     *
-!* SIS2 is distributed in the hope that it will be useful, but WITHOUT *
-!* ANY WARRANTY; without even the implied warranty of MERCHANTABILITY  *
-!* or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public    *
-!* License for more details.                                           *
-!*                                                                     *
-!* For the full text of the GNU General Public License,                *
-!* write to: Free Software Foundation, Inc.,                           *
-!*           675 Mass Ave, Cambridge, MA 02139, USA.                   *
-!* or see:   http://www.gnu.org/licenses/gpl.html                      *
-!***********************************************************************
+
+! This file is a part of SIS2. See LICENSE.md for the license.
 
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
 !                                                                              !
@@ -45,57 +29,53 @@ implicit none ; private
 
 public :: SIS_B_dyn_init, SIS_B_dynamics, SIS_B_dyn_end, SIS_B_dyn_register_restarts
 
+!> The control structure with parameters regulating B-grid ice dynamics
 type, public :: SIS_B_dyn_CS ; private
   real, dimension(:,:), pointer :: &
-    sig11 => NULL(), &  ! sig11, sig12, and sig22 are the three elements of
-    sig12 => NULL(), &  ! the stress tensor, all in units of Pa m.
-    sig22 => NULL()
+    sig11 => NULL(), &  !< The xx component of the stress tensor in Pa m (or N m-1).
+    sig12 => NULL(), &  !< The xy and yx component of the stress tensor in Pa m (or N m-1).
+    sig22 => NULL()     !< The yy component of the stress tensor in Pa m (or N m-1).
 
   ! parameters for calculating water drag and internal ice stresses
-  logical :: SLAB_ICE = .false. ! should we do old style GFDL slab ice?
-  real :: p0 = 2.75e4         ! pressure constant (Pa)
-  real :: p0_rho              ! The pressure constant divided by ice density, N m kg-1.
-  real :: c0 = 20.0           ! another pressure constant
-  real :: cdw = 3.24e-3       ! ice/water drag coef. (nondim)
-  real :: blturn = 0.0        ! air/water surf. turning angle (degrees)
-  real :: EC = 2.0            ! yield curve axis ratio
-  real :: MIV_MIN =  1.0      ! min ice mass to do dynamics (kg/m^2)
-  real :: Rho_ocean = 1030.0  ! The nominal density of sea water, in kg m-3.
-  real :: Rho_ice = 905.0     ! The nominal density of sea ice, in kg m-3.
-  logical :: specified_ice    ! If true, the sea ice is specified and there is
-                              ! no need for ice dynamics.
-  logical :: debug            ! If true, write verbose checksums for debugging purposes.
-  logical :: debug_redundant  ! If true, debug redundant points
-  integer :: evp_sub_steps    ! The number of iterations in the EVP dynamics
-                              ! for each slow time step.
-  real    :: dt_Rheo          ! The maximum sub-cycling time step for the rheology
-                              ! and momentum equations.
-  type(time_type), pointer :: Time ! A pointer to the ice model's clock.
-  type(SIS_diag_ctrl), pointer :: diag ! A structure that is used to regulate the
-                             ! timing of diagnostic output.
+  logical :: SLAB_ICE = .false. !< should we do old style GFDL slab ice?
+  real :: p0 = 2.75e4         !< Hibbler rheology pressure constant (Pa)
+  real :: p0_rho              !< The pressure constant divided by ice density, N m kg-1.
+  real :: c0 = 20.0           !< another pressure constant
+  real :: cdw = 3.24e-3       !< ice/water drag coef. (nondim)
+  real :: blturn = 0.0        !< air/water surf. turning angle (degrees)
+  real :: EC = 2.0            !< yield curve axis ratio
+  real :: MIV_MIN =  1.0      !< min ice mass to do dynamics (kg/m^2)
+  real :: Rho_ocean = 1030.0  !< The nominal density of sea water, in kg m-3.
+  real :: Rho_ice = 905.0     !< The nominal density of sea ice, in kg m-3.
+  logical :: specified_ice    !< If true, the sea ice is specified and there is
+                              !! no need for ice dynamics.
+  logical :: debug            !< If true, write verbose checksums for debugging purposes.
+  logical :: debug_redundant  !< If true, debug redundant points
+  integer :: evp_sub_steps    !< The number of iterations in the EVP dynamics
+                              !! for each slow time step.
+  real    :: dt_Rheo          !< The maximum sub-cycling time step for the rheology
+                              !! and momentum equations.
+  type(time_type), pointer :: Time => NULL() !< A pointer to the ice model's clock.
+  type(SIS_diag_ctrl), pointer :: diag => NULL() !< A structure that is used to regulate the
+                             !! timing of diagnostic output.
+  !>@{ Diagnostic IDs
   integer :: id_fix = -1, id_fiy = -1, id_fcx = -1, id_fcy = -1
   integer :: id_fwx = -1, id_fwy = -1, id_sigi = -1, id_sigii = -1
   integer :: id_stren = -1, id_ui = -1, id_vi = -1
+  !!@}
 end type SIS_B_dyn_CS
 
 contains
 
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
-! SIS_B_dyn_init - initialize the ice dynamics and set parameters.             !
-!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
+!> SIS_B_dyn_init initializes the ice dynamics and sets parameters.
 subroutine SIS_B_dyn_init(Time, G, param_file, diag, CS)
-  type(time_type),     target, intent(in)    :: Time
-  type(SIS_hor_grid_type),     intent(in)    :: G
-  type(param_file_type),       intent(in)    :: param_file
-  type(SIS_diag_ctrl), target, intent(inout) :: diag
-  type(SIS_B_dyn_CS),          pointer       :: CS
-! Arguments: Time - The current model time.
-!  (in)      G - The ocean's grid structure.
-!  (in)      param_file - A structure indicating the open file to parse for
-!                         model parameter values.
-!  (in)      diag - A structure that is used to regulate diagnostic output.
-!  (in/out)  CS - A pointer that is set to point to the control structure
-!                 for this module.
+  type(time_type),     target, intent(in)    :: Time !< The sea-ice model's clock,
+                                                     !! set with the current model time.
+  type(SIS_hor_grid_type),     intent(in)    :: G    !< The horizontal grid type
+  type(param_file_type),       intent(in)    :: param_file !< A structure to parse for run-time parameters
+  type(SIS_diag_ctrl), target, intent(inout) :: diag !< A structure that is used to regulate diagnostic output
+  type(SIS_B_dyn_CS),          pointer       :: CS   !< The control structure for this module
 
 !   This subroutine sets the parameters and registers the diagnostics associated
 ! with the ice dynamics.
@@ -158,12 +138,14 @@ subroutine SIS_B_dyn_init(Time, G, param_file, diag, CS)
   CS%p0_rho = CS%p0 / CS%Rho_ice
 
   call get_param(param_file, mdl, "DEBUG", debug, &
-                 "If true, write out verbose debugging data.", default=.false.)
+                 "If true, write out verbose debugging data.", default=.false., &
+                 debuggingParam=.true.)
   call get_param(param_file, mdl, "DEBUG_SLOW_ICE", CS%debug, &
                  "If true, write out verbose debugging data on the slow ice PEs.", &
-                 default=debug)
+                 default=debug, debuggingParam=.true.)
   call get_param(param_file, mdl, "DEBUG_REDUNDANT", CS%debug_redundant, &
-                 "If true, debug redundant data points.", default=CS%debug)
+                 "If true, debug redundant data points.", default=CS%debug, &
+                 debuggingParam=.true.)
   if ( CS%specified_ice ) then
     CS%slab_ice = .true.
     call log_param(param_file, mdl, "USE_SLAB_ICE", CS%slab_ice, &
@@ -214,18 +196,20 @@ end subroutine SIS_B_dyn_init
 
 
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
-! find_ice_strength - magnitude of force on ice in plastic deformation         !
-!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
+!> find_ice_strength determines the magnitude of force on ice in plastic deformation
 subroutine find_ice_strength(mi, ci, ice_strength, G, CS) !, nCat)
-  type(SIS_hor_grid_type),          intent(in)  :: G
-  real, dimension(SZI_(G),SZJ_(G)), intent(in)  :: mi, ci
-  real, dimension(SZI_(G),SZJ_(G)), intent(out) :: ice_strength
-  type(SIS_B_dyn_CS),               pointer     :: CS
-  ! integer, intent(in) :: nCat
+  type(SIS_hor_grid_type),          intent(in)  :: G   !< The horizontal grid type
+  real, dimension(SZI_(G),SZJ_(G)), intent(in)  :: mi  !< Mass per unit ocean area of sea ice (kg m-2)
+  real, dimension(SZI_(G),SZJ_(G)), intent(in)  :: ci  !< Sea ice concentration (nondim)
+  real, dimension(SZI_(G),SZJ_(G)), intent(out) :: ice_strength  !< The ice strength in N m-1
+  type(SIS_B_dyn_CS),               pointer     :: CS  !< The control structure for this module
+  ! integer, intent(in) :: nCat !< The number of sea ice categories.
+
+  ! Local variables
+  logical :: prs_rothrock = .false.
   !Niki: TOM has a new option for calculating ice strength. If you want to use it set
   !      prs_rothrock=.true.  In that case we need to review and fix the new code
   !      inside if (prs_rothrock), particularly work on getting hi3,ci3,hi3v,Cp & Cf.
-  logical :: prs_rothrock = .false.
   logical :: rdg_lipscomb = .true.
   !Niki: What are ci3,hi3,Cp, Cf?
 !  real, dimension(SZI_(G),SZJ_(G),nCat) :: hi3,ci3
@@ -281,38 +265,32 @@ subroutine find_ice_strength(mi, ci, ice_strength, G, CS) !, nCat)
 end subroutine find_ice_strength
 
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
-! SIS_B_dynamics - take a single dynamics timestep with EVP subcycles            !
-!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
+!> SIS_B_dynamics takes a single dynamics timestep with EVP subcycles
 subroutine SIS_B_dynamics(ci, msnow, mice, ui, vi, uo, vo,       &
      fxat, fyat, sea_lev, fxoc, fyoc, do_ridging, rdg_rate, dt_slow, G, CS)
 
-  type(SIS_hor_grid_type),            intent(inout) :: G
-  real, dimension(SZI_(G),SZJ_(G)),   intent(in   ) :: ci, msnow, mice  ! ice properties
-  real, dimension(SZIB_(G),SZJB_(G)), intent(inout) :: ui, vi      ! ice velocity
-  real, dimension(SZIB_(G),SZJB_(G)), intent(in   ) :: uo, vo      ! ocean velocity
-  real, dimension(SZIB_(G),SZJB_(G)), intent(in   ) :: fxat, fyat  ! air stress on ice
-  real, dimension(SZI_(G),SZJ_(G)),   intent(in   ) :: sea_lev     ! sea level
-  real, dimension(SZIB_(G),SZJB_(G)), intent(  out) :: fxoc, fyoc  ! ice stress on ocean
-  logical,                            intent(in   ) :: do_ridging
-  real, dimension(SZIB_(G),SZJB_(G)), intent(  out) :: rdg_rate    ! ridging rate from drift state
-  real,                               intent(in   ) :: dt_slow
-  type(SIS_B_dyn_CS),                 pointer       :: CS
-! Arguments: ci - The sea ice concentration, nondim.
-!  (in)      msnow - The mass per unit total area (ice covered and ice free)
-!                    of the snow, in kg m-2.
-!  (in)      mice - The mass per unit total area (ice covered and ice free)
-!                   of the ice, in kg m-2.
-!  (inout)   ui - The zonal ice velocity, in m s-1.
-!  (inout)   vi - The meridional ice velocity, in m s-1.
-!  (in)      uo - The zonal ocean velocity, in m s-1.
-!  (in)      vo - The meridional ocean velocity, in m s-1.
-!  (in)      sea_lev - The height of the sea level, including contributions
-!                      from non-levitating ice from an earlier time step, in m.
-!  (in)      dt_slow - The amount of time over which the ice dynamics are to be
-!                      advanced, in s.
-!  (in)      G - The ocean's grid structure.
-!  (in/out)  CS - A pointer to the control structure for this module.
+  type(SIS_hor_grid_type),            intent(inout) :: G   !< The horizontal grid type
+  real, dimension(SZI_(G),SZJ_(G)),   intent(in   ) :: ci  !< Sea ice concentration (nondim)
+  real, dimension(SZI_(G),SZJ_(G)),   intent(in   ) :: msnow !< Mass per unit ocean area of snow (kg m-2)
+  real, dimension(SZI_(G),SZJ_(G)),   intent(in   ) :: mice  !< Mass per unit ocean area of sea ice (kg m-2)
+  real, dimension(SZIB_(G),SZJB_(G)), intent(inout) :: ui    !< Zonal ice velocity in m s-1
+  real, dimension(SZIB_(G),SZJB_(G)), intent(inout) :: vi    !< Meridional ice velocity in m s-1
+  real, dimension(SZIB_(G),SZJB_(G)), intent(in   ) :: uo    !< Zonal ocean velocity in m s-1
+  real, dimension(SZIB_(G),SZJB_(G)), intent(in   ) :: vo    !< Meridional ocean velocity in m s-1
+  real, dimension(SZIB_(G),SZJB_(G)), intent(in   ) :: fxat  !< Zonal air stress on ice in Pa
+  real, dimension(SZIB_(G),SZJB_(G)), intent(in   ) :: fyat  !< Meridional air stress on ice in Pa
+  real, dimension(SZI_(G),SZJ_(G)),   intent(in   ) :: sea_lev !< The height of the sea level, including
+                                                             !! contributions from non-levitating ice from
+                                                             !! an earlier time step, in m.
+  real, dimension(SZIB_(G),SZJB_(G)), intent(  out) :: fxoc  !< Zonal ice stress on ocean in Pa
+  real, dimension(SZIB_(G),SZJB_(G)), intent(  out) :: fyoc  !< Meridional ice stress on ocean in Pa
+  logical,                            intent(in   ) :: do_ridging !< If true, the ice can ridge
+  real, dimension(SZIB_(G),SZJB_(G)), intent(  out) :: rdg_rate !< ridging rate from drift state in UNITS?
+  real,                               intent(in   ) :: dt_slow !< The amount of time over which the ice
+                                                             !! dynamics are to be advanced, in s.
+  type(SIS_B_dyn_CS),                 pointer       :: CS    !< The control structure for this module
 
+  ! Local variables
   real, dimension(SZIB_(G),SZJB_(G)) :: fxic, fyic  ! ice int. stress
   real, dimension(SZIB_(G),SZJB_(G)) :: fxco, fyco  ! coriolis force
 
@@ -693,13 +671,16 @@ subroutine SIS_B_dynamics(ci, msnow, mice, ui, vi, uo, vo,       &
 end subroutine SIS_B_dynamics
 
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
-! sigI - first stress invariant                                                !
-!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
+!> sigI evaluates the first stress invariant
 function sigI(mi, ci, sig11, sig22, sig12, G, CS)
-  type(SIS_hor_grid_type),          intent(in) :: G
-  real, dimension(SZI_(G),SZJ_(G)), intent(in) :: mi, ci, sig11, sig22, sig12
-  real, dimension(SZI_(G),SZJ_(G))             :: sigI
-  type(SIS_B_dyn_CS),               pointer    :: CS
+  type(SIS_hor_grid_type),          intent(in) :: G   !< The horizontal grid type
+  real, dimension(SZI_(G),SZJ_(G)), intent(in) :: mi  !< Mass per unit ocean area of sea ice (kg m-2)
+  real, dimension(SZI_(G),SZJ_(G)), intent(in) :: ci  !< Sea ice concentration (nondim)
+  real, dimension(SZI_(G),SZJ_(G)), intent(in) :: sig11 !< The xx component of the stress tensor, in N m-1
+  real, dimension(SZI_(G),SZJ_(G)), intent(in) :: sig22 !< The yy component of the stress tensor, in N m-1
+  real, dimension(SZI_(G),SZJ_(G)), intent(in) :: sig12 !< The xy & yx component of the stress tensor, in N m-1
+  real, dimension(SZI_(G),SZJ_(G))             :: sigI !< The first stress invariant, nondim
+  type(SIS_B_dyn_CS),               pointer    :: CS  !< The control structure for this module
 
   integer :: i, j, isc, iec, jsc, jec
   isc = G%isc ; iec = G%iec ; jsc = G%jsc ; jec = G%jec
@@ -713,13 +694,16 @@ function sigI(mi, ci, sig11, sig22, sig12, G, CS)
 end function sigI
 
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
-! sigII - second stress invariant                                              !
-!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
+!> sigII evaluates the second stress invariant
 function sigII(mi, ci, sig11, sig22, sig12, G, CS)
-  type(SIS_hor_grid_type),          intent(in) :: G
-  real, dimension(SZI_(G),SZJ_(G)), intent(in) :: mi, ci, sig11, sig22, sig12
-  real, dimension(SZI_(G),SZJ_(G))             :: sigII
-  type(SIS_B_dyn_CS),               pointer    :: CS
+  type(SIS_hor_grid_type),          intent(in) :: G   !< The horizontal grid type
+  real, dimension(SZI_(G),SZJ_(G)), intent(in) :: mi  !< Mass per unit ocean area of sea ice (kg m-2)
+  real, dimension(SZI_(G),SZJ_(G)), intent(in) :: ci  !< Sea ice concentration (nondim)
+  real, dimension(SZI_(G),SZJ_(G)), intent(in) :: sig11 !< The xx component of the stress tensor, in N m-1
+  real, dimension(SZI_(G),SZJ_(G)), intent(in) :: sig22 !< The yy component of the stress tensor, in N m-1
+  real, dimension(SZI_(G),SZJ_(G)), intent(in) :: sig12 !< The xy & yx component of the stress tensor, in N m-1
+  real, dimension(SZI_(G),SZJ_(G))             :: sigII !< The second stress invariant, nondim
+  type(SIS_B_dyn_CS),               pointer    :: CS  !< The control structure for this module
 
   integer :: i, j, isc, iec, jsc, jec
   isc = G%isc ; iec = G%iec ; jsc = G%jsc ; jec = G%jec
@@ -733,23 +717,16 @@ function sigII(mi, ci, sig11, sig22, sig12, G, CS)
 end function sigII
 
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
-! SIS_B_dyn_register_restarts - allocate and register any variables for this   !
-!      module that need to be included in the restart files.                   !
-!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
+!> SIS_B_dyn_register_restarts allocates and registers any variables for this
+!!      module that need to be included in the restart files.
 subroutine SIS_B_dyn_register_restarts(mpp_domain, HI, param_file, CS, Ice_restart, restart_file)
-  type(domain2d),          intent(in) :: mpp_domain
-  type(hor_index_type),    intent(in) :: HI
-  type(param_file_type),   intent(in) :: param_file
-  type(SIS_B_dyn_CS),      pointer    :: CS
-  type(restart_file_type), pointer    :: Ice_restart
-  character(len=*),        intent(in) :: restart_file
-
-! Arguments: G - The ocean's grid structure.
-!  (in)      param_file - A structure indicating the open file to parse for
-!                         model parameter values.
-!  (in/out)  CS - A pointer that is set to point to the control structure
-!                 for this module.
-!
+  type(domain2d),          intent(in) :: mpp_domain !< The ice models' FMS domain type
+  type(hor_index_type),    intent(in) :: HI    !< The horizontal index type describing the domain
+  type(param_file_type),   intent(in) :: param_file !< A structure to parse for run-time parameters
+  type(SIS_B_dyn_CS),      pointer    :: CS    !< The control structure for this module that
+                                               !! will be allocated here
+  type(restart_file_type), pointer    :: Ice_restart !< The sea ice restart control structure
+  character(len=*),        intent(in) :: restart_file !< The ice restart file name
 
 !   This subroutine registers the restart variables associated with the
 ! the ice dynamics.
@@ -778,10 +755,10 @@ subroutine SIS_B_dyn_register_restarts(mpp_domain, HI, param_file, CS, Ice_resta
 end subroutine SIS_B_dyn_register_restarts
 
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
-! SIS_B_dyn_end - deallocate the memory associated with this module.           !
-!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
+!> SIS_B_dyn_end - deallocates the memory associated with this module.
 subroutine SIS_B_dyn_end(CS)
-  type(SIS_B_dyn_CS), pointer :: CS
+  type(SIS_B_dyn_CS), pointer :: CS !< The control structure for this module
+                                    !! that will be deallocated here.
 
   deallocate(CS%sig11) ; deallocate(CS%sig12) ; deallocate(CS%sig22)
 
@@ -789,20 +766,25 @@ subroutine SIS_B_dyn_end(CS)
 end subroutine SIS_B_dyn_end
 
 !TOM>~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
-! ice_stress_old - deriving ice stress as in SIS of CM2.1                      !
-!                  (after Hunke and Dukowicz, 1997)                            !
-!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
+!> ice_stress_old derives the ice stress as in SIS of CM2.1 (after Hunke and Dukowicz, 1997)
 subroutine ice_stress_old(isc,iec,jsc,jec,prs,strn11,strn22,strn12,edt,EC, &
                           sig11,sig22,sig12,del2,ice_present)
-  !
-  integer, intent(in) :: isc,iec,jsc,jec
-  real,    intent(in   ), dimension(isc:iec,jsc:jec) :: prs                     ! ice pressure
-  real,    intent(in   ), dimension(isc:iec,jsc:jec) :: strn11, strn12, strn22  ! strain tensor
-  real,    intent(in   ), dimension(isc:iec,jsc:jec) :: edt
-  real,    intent(in   )                             :: EC
-  real,    intent(inout), dimension(isc:iec,jsc:jec) :: sig11, sig22, sig12     ! stress tensor
-  real,    intent(  out), dimension(isc:iec,jsc:jec) :: del2
-  logical, intent(in   ), dimension(isc:iec,jsc:jec) :: ice_present
+  integer,                          intent(in   ) :: isc !< The starting i-index to work on
+  integer,                          intent(in   ) :: iec !< The ending i-index to work on
+  integer,                          intent(in   ) :: jsc !< The starting i-index to work on
+  integer,                          intent(in   ) :: jec !< The ending j-index to work on
+  real, dimension(isc:iec,jsc:jec), intent(in   ) :: prs !< The internal ice pressure in Pa m.
+  real, dimension(isc:iec,jsc:jec), intent(in   ) :: strn11 !< The xx component of the strain rate, in s-1
+  real, dimension(isc:iec,jsc:jec), intent(in   ) :: strn22 !< The yy component of the strain rate, in s-1
+  real, dimension(isc:iec,jsc:jec), intent(in   ) :: strn12 !< The xy & yx component of the strain rate, in s-1
+  real, dimension(isc:iec,jsc:jec), intent(in   ) :: edt   !< The ice elasticity times a time-step, in Pa m s.
+  real,                             intent(in   ) :: EC    !< The yeild curve axis ratio
+  real, dimension(isc:iec,jsc:jec), intent(inout) :: sig11 !< The xx component of the stress tensor, in N m-1
+  real, dimension(isc:iec,jsc:jec), intent(inout) :: sig22 !< The yy component of the stress tensor, in N m-1
+  real, dimension(isc:iec,jsc:jec), intent(inout) :: sig12 !< The xy & yx component of the stress tensor, in N m-1
+  real, dimension(isc:iec,jsc:jec), intent(  out) :: del2  !< An elipticity modulated estimate of
+                                                           !! the squared strain rate, in s-2.
+  logical, dimension(isc:iec,jsc:jec), intent(in) :: ice_present !< True where there is any ice present in a cell
   !
   integer                          :: i, j
   real, dimension(isc:iec,jsc:jec) :: mp4z, t0, t1, t2
@@ -857,18 +839,25 @@ subroutine ice_stress_old(isc,iec,jsc,jec,prs,strn11,strn22,strn12,edt,EC, &
 end subroutine ice_stress_old
 
 !TOM>~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
-! ice_stress_new - deriving ice stress as in CICE 4.0                          !
-!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
+!> ice_stress_new derives the ice stress as in CICE 4.0
 subroutine ice_stress_new(isc,iec,jsc,jec,prs,strn11,strn22,strn12,edt, EC, &
                           sig11,sig22,sig12,del2,ice_present)
-  integer, intent(in) :: isc,iec,jsc,jec
-  !
-  real,    intent(in   ), dimension(isc:iec,jsc:jec) :: prs                     ! ice pressure
-  real,    intent(in   ), dimension(isc:iec,jsc:jec) :: strn11, strn12, strn22  ! strain tensor
-  real,    intent(in   )                             :: edt, EC
-  real,    intent(inout), dimension(isc:iec,jsc:jec) :: sig11, sig22, sig12     ! stress tensor
-  real,    intent(  out), dimension(isc:iec,jsc:jec) :: del2
-  logical, intent(in   ), dimension(isc:iec,jsc:jec) :: ice_present
+  integer,                          intent(in   ) :: isc !< The starting i-index to work on
+  integer,                          intent(in   ) :: iec !< The ending i-index to work on
+  integer,                          intent(in   ) :: jsc !< The starting i-index to work on
+  integer,                          intent(in   ) :: jec !< The ending j-index to work on
+  real, dimension(isc:iec,jsc:jec), intent(in   ) :: prs !< The internal ice pressure in Pa m.
+  real, dimension(isc:iec,jsc:jec), intent(in   ) :: strn11 !< The xx component of the strain rate
+  real, dimension(isc:iec,jsc:jec), intent(in   ) :: strn22 !< The yy component of the strain rate
+  real, dimension(isc:iec,jsc:jec), intent(in   ) :: strn12 !< The xy & yx component of the strain rate
+  real,                             intent(in   ) :: edt   !< The ice elasticity times a time-step, in Pa m s.
+  real,                             intent(in   ) :: EC    !< The yeild curve axis ratio
+  real, dimension(isc:iec,jsc:jec), intent(inout) :: sig11 !< The xx component of the stress tensor
+  real, dimension(isc:iec,jsc:jec), intent(inout) :: sig22 !< The yy component of the stress tensor
+  real, dimension(isc:iec,jsc:jec), intent(inout) :: sig12 !< The xy & yx component of the stress tensor
+  real, dimension(isc:iec,jsc:jec), intent(  out) :: del2  !< An elipticity modulated estimate of
+                                                           !! the squared strain rate, in s-2.
+  logical, dimension(isc:iec,jsc:jec), intent(in) :: ice_present !< True where there is any ice present in a cell
   !
   integer :: i, j
   real    :: zeta, eta               ! bulk/shear viscosities

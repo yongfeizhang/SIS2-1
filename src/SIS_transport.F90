@@ -1,28 +1,7 @@
-!***********************************************************************
-!*                   GNU General Public License                        *
-!* This file is a part of SIS2.                                        *
-!*                                                                     *
-!* SIS2 is free software; you can redistribute it and/or modify it and *
-!* are expected to follow the terms of the GNU General Public License  *
-!* as published by the Free Software Foundation; either version 2 of   *
-!* the License, or (at your option) any later version.                 *
-!*                                                                     *
-!* SIS2 is distributed in the hope that it will be useful, but WITHOUT *
-!* ANY WARRANTY; without even the implied warranty of MERCHANTABILITY  *
-!* or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public    *
-!* License for more details.                                           *
-!*                                                                     *
-!* For the full text of the GNU General Public License,                *
-!* write to: Free Software Foundation, Inc.,                           *
-!*           675 Mass Ave, Cambridge, MA 02139, USA.                   *
-!* or see:   http://www.gnu.org/licenses/gpl.html                      *
-!***********************************************************************
-
-!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
-!   This module does the transport and redistribution between thickness        !
-! categories for the SIS2 sea ice model.                                       !
-!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
+!> Does the transport and redistribution between thickness categories for the SIS2 sea ice model.
 module SIS_transport
+
+! This file is a part of SIS2.  See LICENSE.md for the licnese.
 
 use SIS_diag_mediator, only : post_SIS_data, query_SIS_averaging_enabled, SIS_diag_ctrl
 use SIS_diag_mediator, only : register_diag_field=>register_SIS_diag_field, time_type
@@ -52,81 +31,84 @@ implicit none ; private
 public :: SIS_transport_init, ice_transport, SIS_transport_end
 public :: adjust_ice_categories
 
+!> The SIS_transport_CS contains parameters for doing advective and parameterized advection.
 type, public :: SIS_transport_CS ; private
 
-  ! parameters for doing advective and parameterized advection.
-  logical :: SLAB_ICE = .false. ! should we do old style GFDL slab ice?
-  real :: Rho_ice = 905.0     ! The nominal density of sea ice, in kg m-3.
-  real :: Rho_snow = 330.0    ! The nominal density of snow on sea ice, in
-                              ! kg m-3.
-  real :: Roll_factor         ! A factor by which the propensity of small
-                              ! amounts of thick sea-ice to become thinner by
-                              ! rolling is increased, or 0 to disable rolling.
-                              ! Sensible values are 0 or larger than 1.
+  logical :: SLAB_ICE = .false. !< If true, do old style GFDL slab ice?
+  real :: Rho_ice = 905.0     !< The nominal density of sea ice, in kg m-3.
+  real :: Rho_snow = 330.0    !< The nominal density of snow on sea ice, in kg m-3.
+  real :: Roll_factor         !< A factor by which the propensity of small amounts of thick sea-ice
+                              !! to become thinner by rolling is increased, or 0 to disable rolling.
+                              !! Sensible values are 0 or larger than 1.
 
-  logical :: readjust_categories  ! If true, readjust the distribution into
-                              ! ice thickness categories after advection.
-  logical :: specified_ice    ! If true, the sea ice is specified and there is
-                              ! no need for ice dynamics.
-  logical :: check_conservation ! If true, write out verbose diagnostics of conservation.
-  logical :: bounds_check     ! If true, check for sensible values of thicknesses,
-                              ! temperatures, salinities, tracers, etc.
-  integer :: adv_sub_steps    ! The number of advective iterations for each slow
-                              ! time step.
-  type(time_type), pointer :: Time ! A pointer to the ice model's clock.
-  type(SIS_diag_ctrl), pointer :: diag ! A structure that is used to regulate the
-                             ! timing of diagnostic output.
-  logical :: do_ridging
+  logical :: readjust_categories !< If true, readjust the distribution into
+                              !! ice thickness categories after advection.
+  logical :: specified_ice    !< If true, the sea ice is specified and there is
+                              !! no need for ice dynamics.
+  logical :: check_conservation !< If true, write out verbose diagnostics of conservation.
+  logical :: bounds_check     !< If true, check for sensible values of thicknesses,
+                              !! temperatures, salinities, tracers, etc.
+  integer :: adv_sub_steps    !< The number of advective iterations for each slow time step.
+  type(time_type), pointer :: Time !< A pointer to the ice model's clock.
+  type(SIS_diag_ctrl), pointer :: diag !< A structure that is used to regulate the
+                              !! timing of diagnostic output.
+  logical :: do_ridging       !< If true, the ridging scheme is enabled.
   type(SIS_continuity_CS),    pointer :: continuity_CSp => NULL()
+          !< The control structure for the SIS continuity module
   type(SIS_tracer_advect_CS), pointer :: SIS_tr_adv_CSp => NULL()
+          !< The control structure for the SIS tracer advection module
   type(SIS_tracer_advect_CS), pointer :: SIS_thick_adv_CSp => NULL()
+          !< The control structure for the SIS thickness advection module
 
+  !>@{ Diagnsotic IDs
   integer :: id_ix_trans = -1, id_iy_trans = -1
+  !!@}
 end type SIS_transport_CS
 
 contains
 
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
-! transport - do ice transport and thickness class redistribution              !
-!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
+!> ice_transport - does ice transport and thickness class redistribution
 subroutine ice_transport(part_sz, mH_ice, mH_snow, mH_pond, uc, vc, TrReg, &
                          dt_slow, G, IG, CS, rdg_hice, snow2ocn, &
                          rdg_rate, rdg_open, rdg_vosh)
-  type(SIS_hor_grid_type),                      intent(inout) :: G
-  type(ice_grid_type),                          intent(inout) :: IG
-  real, dimension(SZI_(G),SZJ_(G),0:SZCAT_(IG)), intent(inout) :: part_sz
-  real, dimension(SZI_(G),SZJ_(G),SZCAT_(IG)),  intent(inout) :: mH_ice, mH_snow, mH_pond
-  type(SIS_tracer_registry_type),               pointer       :: TrReg
-  real, dimension(SZIB_(G),SZJ_(G)),            intent(inout) :: uc
-  real, dimension(SZI_(G),SZJB_(G)),            intent(inout) :: vc
-  real,                                         intent(in)    :: dt_slow
-  type(SIS_transport_CS),                       pointer       :: CS
-  real, dimension(SZI_(G),SZJ_(G),SZCAT_(IG)),  intent(inout) :: rdg_hice
-  real, dimension(SZI_(G),SZJ_(G)),             intent(inout) :: snow2ocn ! snow volume [m] dumped into ocean during ridging
-  real, dimension(SZI_(G),SZJ_(G)),             intent(inout) :: rdg_rate
-  real, dimension(SZI_(G),SZJ_(G)),             intent(inout) :: rdg_open ! formation rate of open water due to ridging
-  real, dimension(SZI_(G),SZJ_(G)),             intent(inout) :: rdg_vosh ! rate of ice volume shifted from level to ridged ice
-! Arguments: part_sz - The fractional ice concentration within a cell in each
-!                      thickness category, nondimensional, 0-1, in/out.
-!  (inout)   mH_ice - The mass per unit area of the ice in each category in H (often kg m-2).
-!  (inout)   mH_snow - The mass per unit area of the snow atop the ice in each
-!                     category in H (often kg m-2).
-!  (inout)   mH_pond - The mass per unit area of the pond on the ice in each category
-!  (in)      uc - The zonal ice velocity, in m s-1.
-!  (in)      vc - The meridional ice velocity, in m s-1.
-!  (inout)   TrReg - The registry of registered SIS ice and snow tracers.
-!  (in)      mH_lim - The lower ice-loading limit of each category, in H (often kg m-2).
-!  (in)      dt_slow - The amount of time over which the ice dynamics are to be
-!                      advanced, in s.
-!  (in)      G - The ocean's grid structure.
-!  (in)      IG - The sea-ice-specific grid structure.
-!  (in/out)  CS - A pointer to the control structure for this module.
-  real, dimension(:,:,:,:), pointer :: &
-    heat_ice=>NULL(), & ! Pointers to the enth_ice and enth_snow arrays from the
-    heat_snow=>NULL()   ! SIS tracer registry.  enth_ice is the enthalpy of the
-                        ! ice in each category and layer, while enth_snow is the
-                        ! enthalpy of the snow atop the ice in each category.
-                        ! Both are in enth_units (J or rescaled).
+  type(SIS_hor_grid_type),           intent(inout) :: G   !< The horizontal grid type
+  type(ice_grid_type),               intent(inout) :: IG  !< The sea-ice specific grid type
+  real, dimension(SZI_(G),SZJ_(G),0:SZCAT_(IG)), &
+                                     intent(inout) :: part_sz !< The fractional ice concentration
+                                                          !! within a cell in each thickness
+                                                          !! category, nondimensional, 0-1.
+  real, dimension(SZI_(G),SZJ_(G),SZCAT_(IG)), &
+                                     intent(inout) :: mH_ice  !< The mass per unit area of the ice
+                                                          !! in each category in H (often kg m-2).
+  real, dimension(SZI_(G),SZJ_(G),SZCAT_(IG)), &
+                                     intent(inout) :: mH_snow !< The mass per unit area of the snow
+                                                          !! atop the ice in each category in H.
+  real, dimension(SZI_(G),SZJ_(G),SZCAT_(IG)), &
+                                     intent(inout) :: mH_pond !< The mass per unit area of the pond
+                                                          !! on the ice in each category in H.
+  type(SIS_tracer_registry_type),    pointer       :: TrReg !< The registry of SIS ice and snow tracers.
+  real, dimension(SZIB_(G),SZJ_(G)), intent(inout) :: uc  !< The zonal ice velocity, in m s-1.
+  real, dimension(SZI_(G),SZJB_(G)), intent(inout) :: vc  !< The meridional ice velocity, in m s-1.
+  real,                              intent(in)    :: dt_slow !< The amount of time over which the
+                                                          !! ice dynamics are to be advanced, in s.
+  type(SIS_transport_CS),            pointer       :: CS  !< A pointer to the control structure for this module
+  real, dimension(SZI_(G),SZJ_(G),SZCAT_(IG)), &
+                                     intent(inout) :: rdg_hice !< The thickness of ridged ice, in kg m-2.
+  real, dimension(SZI_(G),SZJ_(G)),  intent(inout) :: snow2ocn !< snow volume [m] dumped into ocean during ridging
+  real, dimension(SZI_(G),SZJ_(G)),  intent(inout) :: rdg_rate !< The ice ridging rate in s-1.
+  real, dimension(SZI_(G),SZJ_(G)),  intent(inout) :: rdg_open !< formation rate of open water due to ridging
+  real, dimension(SZI_(G),SZJ_(G)),  intent(inout) :: rdg_vosh !< rate of ice volume shifted from level to ridged ice
+
+  ! Local variables
+  real, dimension(:,:,:,:), &
+    pointer :: heat_ice=>NULL() ! Pointer to the enth_ice array from the SIS tracer registry.
+                        ! Enth_ice is the enthalpy of the ice in each category and layer, in
+                        ! enth_units (J or rescaled).
+  real, dimension(:,:,:,:), &
+    pointer :: heat_snow=>NULL() ! Pointer to the enth_snow array from the SIS tracer registry.
+                        ! Enth_snow is the enthalpy of the snow atop the ice in each category, in
+                        ! enth_units (J or rescaled).
   real, dimension(SZIB_(G),SZJ_(G),SZCAT_(IG)) :: &
     uh_ice, &  ! Zonal fluxes of ice in H m2 s-1.
     uh_snow, & ! Zonal fluxes of snow in H m2 s-1.
@@ -455,31 +437,32 @@ subroutine ice_transport(part_sz, mH_ice, mH_snow, mH_pond, uc, vc, TrReg, &
 
 end subroutine ice_transport
 
-
+!> adjust_ice_categories moves mass between thickness categories if it is thinner or
+!! thicker than the bounding limits of each category.
 subroutine adjust_ice_categories(mH_ice, mH_snow, mH_pond, part_sz, TrReg, G, IG, CS)
-  type(SIS_hor_grid_type),                    intent(inout) :: G
-  type(ice_grid_type),                        intent(inout) :: IG
-  real, dimension(SZI_(G),SZJ_(G),SZCAT_(IG)),   intent(inout) :: mH_ice, mH_snow, mH_pond
-  real, dimension(SZI_(G),SZJ_(G),0:SZCAT_(IG)), intent(inout) :: part_sz
-  type(SIS_tracer_registry_type),             pointer       :: TrReg
-  type(SIS_transport_CS),                     pointer       :: CS
+  type(SIS_hor_grid_type), intent(inout) :: G   !< The horizontal grid type
+  type(ice_grid_type),     intent(inout) :: IG  !< The sea-ice specific grid type
+  real, dimension(SZI_(G),SZJ_(G),SZCAT_(IG)), &
+                           intent(inout) :: mH_ice  !< The mass per unit area of the ice
+                                                !! in each category in H (often kg m-2).
+  real, dimension(SZI_(G),SZJ_(G),SZCAT_(IG)), &
+                           intent(inout) :: mH_snow !< The mass per unit area of the snow
+                                                !! atop the ice in each category in H (often kg m-2).
+  real, dimension(SZI_(G),SZJ_(G),SZCAT_(IG)), &
+                           intent(inout) :: mH_pond !< The mass per unit area of the pond
+                                                !! on the ice in each category in H (often kg m-2).
+  real, dimension(SZI_(G),SZJ_(G),0:SZCAT_(IG)), &
+                           intent(inout) :: part_sz !< The fractional ice concentration
+                                                !! within a cell in each thickness
+                                                !! category, nondimensional, 0-1.
+  type(SIS_tracer_registry_type), &
+                           pointer       :: TrReg !< The registry of SIS ice and snow tracers.
+  type(SIS_transport_CS),  pointer       :: CS  !< A pointer to the control structure for this module
 
 !   This subroutine moves mass between thickness categories if it is thinner or
 ! thicker than the bounding limits of each category.
 
-! Arguments: part_sz - The fractional ice concentration within a cell in each
-!                      thickness category, nondimensional, 0-1 at the end, in/out.
-!  (inout)   mca_ice - The mass per unit grid-cell area of the ice in each
-!                      category in H (often kg m-2).
-!  (inout)   mca_snow - The mass per unit grid-cell area of the snow atop the
-!                       ice in each category in H (often kg m-2).
-!  (inout)   mca_pond - The mass per unit grid-cell area of the melt ponds atop
-!                       the ice in each category in H (often kg m-2).
-!  (inout)   mH_ice - The thickness of the ice in each category in H (often kg m-2).
-!  (inout)   TrReg - The registry of registered SIS ice and snow tracers.
-!  (in)      G - The ocean's grid structure.
-!  (in)      IG - The sea-ice-specific grid structure.
-!  (in/out)  CS - A pointer to the control structure for this module.
+  ! Local variables
   real :: mca_trans  ! The cell-averaged ice mass transfered between categories, in kg m-2.
   real :: part_trans ! The fractional area transfered between categories, nondim.
   real :: snow_trans ! The cell-averaged snow transfered between categories, in kg m-2.
@@ -672,15 +655,39 @@ subroutine adjust_ice_categories(mH_ice, mH_snow, mH_pond, part_sz, TrReg, G, IG
 
 end subroutine adjust_ice_categories
 
+!> compress_ice compresses the ice, starting with the thinnest category, if the total fractional
+!! ice coverage exceeds 1.  It is assumed at the start that the sum over all categories (including
+!! ice free) of part_sz is 1, but that the part_sz of the ice free category may be negative to make
+!! this so.  In this routine, the mass (volume) is conserved, while the fractional coverage is
+!! solved for, while the new thicknesses are diagnosed.
 subroutine compress_ice(part_sz, mca_ice, mca_snow, mca_pond, &
                         mH_ice, mH_snow, mH_pond, TrReg, G, IG, CS)
-  type(SIS_hor_grid_type),                       intent(inout) :: G
-  type(ice_grid_type),                           intent(inout) :: IG
-  real, dimension(SZI_(G),SZJ_(G),0:SZCAT_(IG)), intent(inout) :: part_sz
-  real, dimension(SZI_(G),SZJ_(G),SZCAT_(IG)),   intent(inout) :: mca_ice, mca_snow, mca_pond
-  real, dimension(SZI_(G),SZJ_(G),SZCAT_(IG)),   intent(inout) :: mH_ice, mH_snow, mH_pond
-  type(SIS_tracer_registry_type),                pointer       :: TrReg
-  type(SIS_transport_CS),                        pointer       :: CS
+  type(SIS_hor_grid_type),           intent(inout) :: G   !< The horizontal grid type
+  type(ice_grid_type),               intent(inout) :: IG  !< The sea-ice specific grid type
+  real, dimension(SZI_(G),SZJ_(G),0:SZCAT_(IG)), &
+                                     intent(inout) :: part_sz !< The fractional ice concentration
+                                                          !! within a cell in each thickness
+                                                          !! category, nondimensional, 0-1.
+  real, dimension(SZI_(G),SZJ_(G),SZCAT_(IG)), &
+                                     intent(inout) :: mca_ice !< The mass per unit grid-cell area
+                                                          !! of the ice in each category in H (often kg m-2).
+  real, dimension(SZI_(G),SZJ_(G),SZCAT_(IG)), &
+                                     intent(inout) :: mca_snow !< The mass per unit grid-cell area
+                                                          !! of the snow atop the ice in each category in H.
+  real, dimension(SZI_(G),SZJ_(G),SZCAT_(IG)), &
+                                     intent(inout) :: mca_pond !< The mass per unit grid-cell area
+                                                          !! of the melt ponds atop the ice in each category in H.
+  real, dimension(SZI_(G),SZJ_(G),SZCAT_(IG)), &
+                                     intent(inout) :: mH_ice  !< The mass per unit area of the ice
+                                                          !! in each category in H (often kg m-2).
+  real, dimension(SZI_(G),SZJ_(G),SZCAT_(IG)), &
+                                     intent(inout) :: mH_snow !< The mass per unit area of the snow
+                                                          !! atop the ice in each category in H (often kg m-2).
+  real, dimension(SZI_(G),SZJ_(G),SZCAT_(IG)), &
+                                     intent(inout) :: mH_pond !< The mass per unit area of the pond
+                                                          !! on the ice in each category in H (often kg m-2).
+  type(SIS_tracer_registry_type),    pointer       :: TrReg !< The registry of SIS ice and snow tracers.
+  type(SIS_transport_CS),            pointer       :: CS  !< A pointer to the control structure for this module
 !   This subroutine compresses the ice, starting with the thinnest category, if
 ! the total fractional ice coverage exceeds 1.  It is assumed at the start that
 ! the sum over all categories (including ice free) of part_sz is 1, but that the
@@ -692,24 +699,7 @@ subroutine compress_ice(part_sz, mca_ice, mca_snow, mca_pond, &
 ! scheme.  A more complete ridging scheme would also compress thicker ice and
 ! allow the fractional ice coverage to drop below 1.
 
-! Arguments: part_sz - The fractional ice concentration within a cell in each
-!                      thickness category, nondimensional, 0-1 at the end, in/out.
-!  (inout)   mca_ice - The mass per unit grid-cell area of the ice in each
-!                      category in H (often kg m-2).
-!  (inout)   mca_snow - The mass per unit grid-cell area of the snow atop the
-!                       ice in each category in H.
-!  (inout)   mca_pond - The mass per unit grid-cell area of the melt ponds atop
-!                       the ice in each category in H.
-!  (inout)   mH_ice - The thickness of the ice in each category in H.
-!  (inout)   mH_snow - The thickness of the snow atop the ice in each category
-!                     in H.
-!  (inout)   mH_pond - The thickness of the pond atop the ice in each category
-!                     in H.
-!  (inout)   TrReg - The registry of registered SIS ice and snow tracers.
-!  (in)      G - The ocean's grid structure.
-!  (in)      IG - The sea-ice-specific grid structure.
-!  (in/out)  CS - A pointer to the control structure for this module.
-
+  ! Local variables
   real, dimension(SZI_(G),SZJ_(G)) :: excess_cover
   real :: compression_ratio
   real :: Icompress_here
@@ -864,14 +854,17 @@ end subroutine compress_ice
 
 
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
+!> Advect the ice tracers using a very old slab-ice algorithm dating back to the Manabe model.
 subroutine slab_ice_advect(uc, vc, trc, stop_lim, dt_slow, G, CS)
-  type(SIS_hor_grid_type),           intent(inout) :: G
-  real, dimension(SZIB_(G),SZJ_(G)), intent(in   ) :: uc  ! x-face advecting velocity
-  real, dimension(SZI_(G),SZJB_(G)), intent(in   ) :: vc  ! y-face advecting velocity
-  real, dimension(SZI_(G),SZJ_(G)),  intent(inout) :: trc ! tracer to advect
-  real,                              intent(in   ) :: stop_lim
-  real,                              intent(in   ) :: dt_slow
-  type(SIS_transport_CS),            pointer       :: CS
+  type(SIS_hor_grid_type),           intent(inout) :: G   !< The horizontal grid type
+  real, dimension(SZIB_(G),SZJ_(G)), intent(in   ) :: uc  !< x-face advecting velocity in m s-1
+  real, dimension(SZI_(G),SZJB_(G)), intent(in   ) :: vc  !< y-face advecting velocity in m s-1
+  real, dimension(SZI_(G),SZJ_(G)),  intent(inout) :: trc !< Depth integrated amount of the tracer to
+                                                          !! advect, in m kg kg-1 or other units
+  real,                              intent(in   ) :: stop_lim !< A tracer amount below which to
+                                                          !! stop advection, in the same units as tr
+  real,                              intent(in   ) :: dt_slow !< The time covered by this call, in s.
+  type(SIS_transport_CS),            pointer       :: CS  !< The control structure for this module
 ! Arguments: uc - The zonal ice velocity, in m s-1.
 !  (in)      vc - The meridional ice velocity, in m s-1.
 !  (inout)   trc - A tracer concentration times thickness, in m kg kg-1 or
@@ -929,21 +922,22 @@ subroutine slab_ice_advect(uc, vc, trc, stop_lim, dt_slow, G, CS)
 
 end subroutine slab_ice_advect
 
+!> get_total_amounts determines the globally integrated mass of snow and ice
 subroutine get_total_amounts(mH_ice, mH_snow, part_sz, G, IG, tot_ice, tot_snow)
-  type(SIS_hor_grid_type), intent(inout) :: G
-  type(ice_grid_type),     intent(inout) :: IG
-  real, dimension(SZI_(G),SZJ_(G),SZCAT_(IG)),   intent(in)  :: mH_ice, mH_snow
-  real, dimension(SZI_(G),SZJ_(G),0:SZCAT_(IG)), intent(in)  :: part_sz
-  type(EFP_type), intent(out) :: tot_ice, tot_snow
-! Arguments: part_sz - The fractional ice concentration within a cell in each
-!                      thickness category, nondimensional, 0-1 at the end, in/out.
-!  (in)      mH_ice - The mass per unit area of the ice in each
-!                    category in units of H (often kg m-2).
-!  (in)      mH_snow - The mass per unit area of the snow atop the
-!                     ice in each category in units of H (often kg m-2).
-!  (in)      G - The ocean's grid structure.
-!  (out)     tot_ice - The globally integrated total ice, in kg.
-!  (out)     tot_snow - The globally integrated total snow, in kg.
+  type(SIS_hor_grid_type), intent(inout) :: G   !< The horizontal grid type
+  type(ice_grid_type),     intent(inout) :: IG  !< The sea-ice specific grid type
+  real, dimension(SZI_(G),SZJ_(G),SZCAT_(IG)), &
+                           intent(in)    :: mH_ice  !< The mass per unit area of the ice
+                                                !! in each category in H (often kg m-2).
+  real, dimension(SZI_(G),SZJ_(G),SZCAT_(IG)), &
+                           intent(in)    :: mH_snow !< The mass per unit area of the snow
+                                                !! atop the ice in each category in H.
+  real, dimension(SZI_(G),SZJ_(G),0:SZCAT_(IG)), &
+                           intent(in)    :: part_sz !< The fractional ice concentration
+                                                !! within a cell in each thickness
+                                                !! category, nondimensional, 0-1.
+  type(EFP_type),          intent(out)   :: tot_ice  !< The globally integrated total ice, in kg.
+  type(EFP_type),          intent(out)   :: tot_snow !< The globally integrated total snow, in kg.
 
   real, dimension(G%isc:G%iec, G%jsc:G%jec) :: sum_mca_ice, sum_mca_snow
   real :: total
@@ -962,32 +956,34 @@ subroutine get_total_amounts(mH_ice, mH_snow, part_sz, G, IG, tot_ice, tot_snow)
 
 end subroutine get_total_amounts
 
+!> get_total_amounts determines the globally integrated enthalpy of snow and ice
 subroutine get_total_enthalpy(mH_ice, mH_snow, part_sz, TrReg, &
                               G, IG, enth_ice, enth_snow)
-  type(SIS_hor_grid_type),                       intent(inout) :: G
-  type(ice_grid_type),                           intent(inout) :: IG
-  real, dimension(SZI_(G),SZJ_(G),SZCAT_(IG)),   intent(in)  :: mH_ice, mH_snow
-  real, dimension(SZI_(G),SZJ_(G),0:SZCAT_(IG)), intent(in)  :: part_sz
-  type(SIS_tracer_registry_type),                pointer     :: TrReg
-  type(EFP_type),                                intent(out) :: enth_ice, enth_snow
-! Arguments: part_sz - The fractional ice concentration within a cell in each
-!                      thickness category, nondimensional, 0-1 at the end, in/out.
-!  (in)      mH_ice - The mass per unit area of the ice in each
-!                    category in units of H (often kg m-2).
-!  (in)      mH_snow - The mass per unit area of the snow atop the
-!                     ice in each category in units of H (often kg m-2).
-!  (in)      TrReg - The registry of registered SIS ice and snow tracers.
-!  (in)      G - The ocean's grid structure.
-!  (in)      IG - The sea-ice-specific grid structure.
-!  (out)     enth_ice - The globally integrated total ice enthalpy in J.
-!  (out)     enth_snow - The globally integrated total snow enthalpy in J.
+  type(SIS_hor_grid_type), intent(inout) :: G   !< The horizontal grid type
+  type(ice_grid_type),     intent(inout) :: IG  !< The sea-ice specific grid type
+  real, dimension(SZI_(G),SZJ_(G),SZCAT_(IG)), &
+                           intent(in)    :: mH_ice  !< The mass per unit area of the ice
+                                                !! in each category in H (often kg m-2).
+  real, dimension(SZI_(G),SZJ_(G),SZCAT_(IG)), &
+                           intent(in)    :: mH_snow !< The mass per unit area of the snow
+                                                !! atop the ice in each category in H.
+  real, dimension(SZI_(G),SZJ_(G),0:SZCAT_(IG)), &
+                           intent(in)    :: part_sz !< The fractional ice concentration
+                                                !! within a cell in each thickness
+                                                !! category, nondimensional, 0-1.
+  type(SIS_tracer_registry_type), pointer :: TrReg !< The registry of SIS ice and snow tracers.
+  type(EFP_type),          intent(out)   :: enth_ice !< The globally integrated total ice enthalpy in J.
+  type(EFP_type),          intent(out)   :: enth_snow !< The globally integrated total snow enthalpy in J.
 
-  real, dimension(:,:,:,:), pointer :: &
-    heat_ice=>NULL(), & ! Pointers to the enth_ice and enth_snow arrays from the
-    heat_snow=>NULL()   ! SIS tracer registry.  enth_ice is the enthalpy of the
-                        ! ice in each category and layer, while enth_snow is the
-                        ! enthalpy of the snow atop the ice in each category.
-                        ! Both are in enth_units (J or rescaled).
+  ! Local variables
+  real, dimension(:,:,:,:), &
+    pointer :: heat_ice=>NULL() ! Pointer to the enth_ice array from the SIS tracer registry.
+                        ! Enth_ice is the enthalpy of the ice in each category and layer, in
+                        ! enth_units (J or rescaled).
+  real, dimension(:,:,:,:), &
+    pointer :: heat_snow=>NULL() ! Pointer to the enth_snow array from the SIS tracer registry.
+                        ! Enth_snow is the enthalpy of the snow atop the ice in each category, in
+                        ! enth_units (J or rescaled).
   real, dimension(G%isc:G%iec, G%jsc:G%jec) :: sum_enth_ice, sum_enth_snow
   real :: total, I_Nk
   integer :: i, j, k, m, isc, iec, jsc, jec, nLay
@@ -1013,21 +1009,15 @@ subroutine get_total_enthalpy(mH_ice, mH_snow, part_sz, TrReg, &
 end subroutine get_total_enthalpy
 
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
-! SIS_transport_init - initialize the ice transport and set parameters.        !
-!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
+!> SIS_transport_init initializes the ice transport and sets parameters.
 subroutine SIS_transport_init(Time, G, param_file, diag, CS)
-  type(time_type),     target, intent(in)    :: Time
-  type(SIS_hor_grid_type),     intent(in)    :: G
-  type(param_file_type),       intent(in)    :: param_file
-  type(SIS_diag_ctrl), target, intent(inout) :: diag
-  type(SIS_transport_CS),      pointer       :: CS
-! Arguments: Time - The current model time.
-!  (in)      G - The ocean's grid structure.
-!  (in)      param_file - A structure indicating the open file to parse for
-!                         model parameter values.
-!  (in)      diag - A structure that is used to regulate diagnostic output.
-!  (in/out)  CS - A pointer that is set to point to the control structure
-!                 for this module.
+  type(time_type),     target, intent(in)    :: Time !< The sea-ice model's clock,
+                                                     !! set with the current model time.
+  type(SIS_hor_grid_type),     intent(in)    :: G    !< The horizontal grid type
+  type(param_file_type),       intent(in)    :: param_file !< A structure to parse for run-time parameters
+  type(SIS_diag_ctrl), target, intent(inout) :: diag !< A structure that is used to regulate diagnostic output
+  type(SIS_transport_CS),      pointer       :: CS   !< The control structure for this module
+                                                     !! that is allocated and populated here
 
 !   This subroutine sets the parameters and registers the diagnostics associated
 ! with the ice dynamics.
@@ -1095,7 +1085,8 @@ subroutine SIS_transport_init(Time, G, param_file, diag, CS)
   call get_param(param_file, mdl, "CHECK_ICE_TRANSPORT_CONSERVATION", CS%check_conservation, &
                  "If true, use add multiple diagnostics of ice and snow \n"//&
                  "mass conservation in the sea-ice transport code.  This \n"//&
-                 "is expensive and should be used sparingly.", default=.false.)
+                 "is expensive and should be used sparingly.", &
+                 default=.false., debuggingParam=.true.)
   call get_param(param_file, mdl, "DO_RIDGING", CS%do_ridging, &
                  "If true, apply a ridging scheme to the convergent ice. \n"//&
                  "Otherwise, ice is compressed proportionately if the \n"//&
@@ -1132,10 +1123,10 @@ subroutine SIS_transport_init(Time, G, param_file, diag, CS)
 end subroutine SIS_transport_init
 
 !~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
-! SIS_transport_end - deallocate the memory associated with this module.       !
-!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
+!> SIS_transport_end deallocates the memory associated with this module.
 subroutine SIS_transport_end(CS)
-  type(SIS_transport_CS), pointer :: CS
+  type(SIS_transport_CS), pointer :: CS  !< The control structure for this module that
+                                         !! is deallocated here
 
   call SIS_continuity_end(CS%continuity_CSp)
   call SIS_tracer_advect_end(CS%SIS_tr_adv_CSp)

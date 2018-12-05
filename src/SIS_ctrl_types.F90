@@ -1,15 +1,11 @@
-!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
-! SIS_types contains a number of common SIS types, along with subroutines to   !
-!   perform various tasks on these types, including allocation, deallocation,  !
-!   registration for restarts, and checksums.                                  !
-!~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~!
+!> Contains a number of common SIS types, along with subroutines to perform various tasks on these
+!! types, including allocation, deallocation, registration for restarts, and checksums.
 module SIS_ctrl_types
 
 ! use mpp_mod,          only: mpp_sum, stdout, input_nml_file, PE_here => mpp_pe
 ! use mpp_domains_mod,  only: domain2D, mpp_get_compute_domain, CORNER, EAST, NORTH
 use mpp_domains_mod,  only: domain2D, CORNER, EAST, NORTH
 ! use mpp_parameter_mod, only: CGRID_NE, BGRID_NE, AGRID
-use time_manager_mod, only: time_type, time_type_to_real
 use coupler_types_mod,only: coupler_2d_bc_type, coupler_3d_bc_type
 use coupler_types_mod,only: coupler_type_initialized, coupler_type_set_diags
 
@@ -24,13 +20,14 @@ use SIS_types, only : fast_ice_avg_type, ice_rad_type, simple_OSS_type
 use SIS_types, only : total_sfc_flux_type
 use SIS_optics, only : SIS_optics_CS
 
-use MOM_coms, only : PE_here
+use MOM_coms,          only : PE_here
 use MOM_error_handler, only : SIS_error=>MOM_error, FATAL, WARNING, SIS_mesg=>MOM_mesg, is_root_pe
-use MOM_file_parser, only : param_file_type
-use MOM_hor_index,   only : hor_index_type
+use MOM_file_parser,   only : param_file_type
+use MOM_hor_index,     only : hor_index_type
+use MOM_time_manager,  only : time_type, time_type_to_real
 use SIS_diag_mediator, only : SIS_diag_ctrl, post_data=>post_SIS_data
 use SIS_diag_mediator, only : register_SIS_diag_field, register_static_field
-use SIS_sum_output_type, only : SIS_sum_out_CS
+use SIS_sum_output, only : SIS_sum_out_CS
 ! use SIS_tracer_registry, only : SIS_tracer_registry_type
 use SIS_tracer_flow_control, only : SIS_tracer_flow_control_CS
 
@@ -104,6 +101,8 @@ type SIS_slow_CS
 
   logical :: specified_ice  !< If true, the sea ice is specified and there is
                             !! no need for ice dynamics.
+  logical :: pass_stress_mag !< If true, calculate the time-mean magnitude of the
+                            !! ice-ocean stresses and pass it to the ocean.
   logical :: do_icebergs    !< If true, use the Lagrangian iceberg code, which
                             !! modifies the calving field among other things.
   logical :: pass_iceberg_area_to_ocean !< If true, iceberg area is passed through coupler
@@ -173,14 +172,19 @@ contains
 !> ice_diagnostics_init does the registration for a variety of sea-ice model
 !! diagnostics and saves several static diagnotic fields.
 subroutine ice_diagnostics_init(IOF, OSS, FIA, G, IG, diag, Time, Cgrid)
-  type(ice_ocean_flux_type),  intent(inout) :: IOF
-  type(ocean_sfc_state_type), intent(inout) :: OSS
-  type(fast_ice_avg_type),    intent(inout) :: FIA
-  type(SIS_hor_grid_type),    intent(inout) :: G
-  type(ice_grid_type),        intent(in)    :: IG
-  type(SIS_diag_ctrl),        intent(in)    :: diag
-  type(time_type),            intent(inout) :: Time
-  logical,          optional, intent(in)    :: Cgrid
+  type(ice_ocean_flux_type),  intent(inout) :: IOF !< A structure containing fluxes from the ice to
+                                                   !! the ocean that are calculated by the ice model.
+  type(ocean_sfc_state_type), intent(inout) :: OSS !< A structure containing the arrays that describe
+                                                   !! the ocean's surface state for the ice model.
+  type(fast_ice_avg_type),    intent(inout) :: FIA !< A type containing averages of fields
+                                                   !! (mostly fluxes) over the fast updates
+  type(SIS_hor_grid_type),    intent(inout) :: G   !< The horizontal grid type
+  type(ice_grid_type),        intent(in)    :: IG  !< The sea-ice specific grid type
+  type(SIS_diag_ctrl),        intent(in)    :: diag !< A structure that is used to regulate diagnostic output
+  type(time_type),            intent(inout) :: Time !< The sea-ice model's clock,
+                                                    !! set with the current model time.
+  logical,          optional, intent(in)    :: Cgrid !< If true, use a C-grid discretization for the
+                                                    !! sea ice velocities.  The default is true.
 
   real, dimension(G%isc:G%iec,G%jsc:G%jec) :: tmp_diag ! A temporary diagnostic array
   real                  :: I_area_Earth ! The inverse of the area of the sphere, in m-2.
@@ -368,12 +372,14 @@ end subroutine ice_diagnostics_init
 !> ice_diags_fast_init does the registration for a variety of sea-ice model
 !! diagnostics associated with the rapid physics updates.
 subroutine ice_diags_fast_init(Rad, G, IG, diag, Time, component)
-  type(ice_rad_type),         intent(inout) :: Rad
-  type(SIS_hor_grid_type),    intent(inout) :: G
-  type(ice_grid_type),        intent(in)    :: IG
-  type(SIS_diag_ctrl),        intent(in)    :: diag
-  type(time_type),            intent(inout) :: Time
-  character(len=*), optional, intent(in)    :: component
+  type(ice_rad_type),         intent(inout) :: Rad !< A structure with fields related to the absorption,
+                                                   !! reflection and transmission of shortwave radiation.
+  type(SIS_hor_grid_type),    intent(inout) :: G   !< The horizontal grid type
+  type(ice_grid_type),        intent(in)    :: IG  !< The sea-ice specific grid type
+  type(SIS_diag_ctrl),        intent(in)    :: diag !< A structure that is used to regulate diagnostic output
+  type(time_type),            intent(inout) :: Time !< The sea-ice model's clock,
+                                                    !! set with the current model time.
+  character(len=*), optional, intent(in)    :: component !< An optional alternate component name
 
   real, parameter       :: missing = -1e34  ! The fill value for missing data.
   integer :: i, j, k, isc, iec, jsc, jec, n, nLay
@@ -429,9 +435,10 @@ subroutine ice_diags_fast_init(Rad, G, IG, diag, Time, component)
 
 end subroutine ice_diags_fast_init
 
+!> Allocate an array of integer diagnostic arrays and set them to -1, if they are not already allocated
 subroutine safe_alloc_ids_1d(ids, nids)
-  integer, allocatable :: ids(:)
-  integer, intent(in)  :: nids
+  integer, allocatable, intent(inout) :: ids(:) !< An array of diagnostic IDs to allocate
+  integer,              intent(in)    :: nids   !< The number of IDs to allocate
 
   if (.not.ALLOCATED(ids)) then
     allocate(ids(nids)) ; ids(:) = -1
